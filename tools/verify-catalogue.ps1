@@ -87,6 +87,14 @@ foreach ($mod in $cat.mods) {
     $scan = & $scanner -Path $zip -Json | ConvertFrom-Json
     if ($scan -isnot [array]) { $scan = @($scan) }
 
+    # Setup steps are unpacked separately: the scanner reads assemblies, and a .ps1 is not one.
+    # They still need pinning, because a setup step is PowerShell that runs on the machine.
+    $unpacked = Join-Path $work ([IO.Path]::GetFileNameWithoutExtension($asset.name) + '-files')
+    if (Test-Path $unpacked) { Remove-Item $unpacked -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $unpacked | Out-Null
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::ExtractToDirectory($zip, $unpacked)
+
     foreach ($file in $mod.files) {
         $found = $scan | Where-Object { $_.file -eq $file.fileName } | Select-Object -First 1
         if (-not $found) {
@@ -123,6 +131,33 @@ foreach ($mod in $cat.mods) {
             Write-Host "  CAPABILITY CHANGE: $($file.fileName)" -ForegroundColor Red
         } else {
             Write-Host "  ok        : $($file.fileName)  [$capText]" -ForegroundColor Green
+        }
+    }
+
+    foreach ($step in @($mod.postInstall)) {
+        if (-not $step) { continue }
+        $scriptPath = Join-Path $unpacked $step.script
+        if (-not (Test-Path $scriptPath)) {
+            [void]$problems.Add("$($mod.repo): setup step $($step.script) is not in release $tag")
+            Write-Host "  MISSING SETUP STEP: $($step.script)" -ForegroundColor Red
+            continue
+        }
+
+        $scriptHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $scriptPath).Hash.ToLowerInvariant()
+
+        if ($Update) {
+            $step | Add-Member -NotePropertyName sha256 -NotePropertyValue $scriptHash -Force
+            Write-Host "  pinned    : $($step.script) (setup step)" -ForegroundColor Green
+            Write-Host "              sha256 $scriptHash"
+            continue
+        }
+
+        $checked++
+        if ($step.sha256 -ne $scriptHash) {
+            [void]$problems.Add("$($mod.repo)/$($step.script): setup step sha256 mismatch - pinned $($step.sha256), got $scriptHash")
+            Write-Host "  SETUP STEP CHANGED: $($step.script)" -ForegroundColor Red
+        } else {
+            Write-Host "  ok        : $($step.script) (setup step)" -ForegroundColor Green
         }
     }
 

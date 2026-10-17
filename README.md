@@ -43,6 +43,7 @@ One JSON object with a schema version and an array of mods:
 | `approvedVersion` | no | The release tag a reviewer actually looked at, e.g. `v1.5.0`. See **Pinning and capabilities** |
 | `files[].sha256` | no | SHA-256 of that file in the approved release, recorded at review time |
 | `files[].capabilities` | no | What that file can reach outside the game process, as reported by `tools/scan-capabilities.ps1` |
+| `postInstall[].sha256` | no | SHA-256 of that setup script in the approved release. Required whenever `approvedVersion` is set |
 
 Keep entries alphabetical by repository name. At most 64 mods and 16 files per mod — caps, not targets.
 
@@ -135,6 +136,13 @@ references.
 | `base64` | encode or decode base64 |
 | `registry`, `environment` | read the registry or environment |
 | `binary-serialization` | use `BinaryFormatter` |
+
+A pinned entry must pin **everything it installs**, including setup scripts. A setup step is
+PowerShell that runs on the machine, shipped in the same replaceable release asset as the DLLs,
+and it is the only catalogue-declared thing that reaches a shell — so leaving it unpinned while
+calling the release reviewed would put the loudest part of an install outside the only check. The
+launcher refuses an `approvedVersion` whose files or scripts are missing a hash, rather than
+quietly treating it as reviewed.
 
 **This is not a safety verdict.** Most of these are things mods legitimately need — a mod that
 installs other mods has to write files, and this one has to start a process. The point is that a

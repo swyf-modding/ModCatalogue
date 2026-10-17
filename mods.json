@@ -72,7 +72,8 @@
       "postInstall": [
         {
           "script": "setup-chatbridge.ps1",
-          "description": "Downloads and installs ChatBridge so Creator Mode can read YouTube, TikTok and Kick chat and serve the OBS overlay. Skipping leaves the mod installed but Creator Mode locked."
+          "description": "Downloads and installs ChatBridge so Creator Mode can read YouTube, TikTok and Kick chat and serve the OBS overlay. Skipping leaves the mod installed but Creator Mode locked.",
+          "sha256": "144e1c9e21be198e6be2ffbecbfbc0ebe5e46c267fb02c61c86d9e682105fc91"
         }
       ]
     },
