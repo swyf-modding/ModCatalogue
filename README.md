@@ -40,6 +40,9 @@ One JSON object with a schema version and an array of mods:
 | `files[].folder` | yes | `plugins` for a mod, `core` for the shared library. Nothing else is accepted |
 | `files[].expectsPluginAttribute` | yes | `true` for a mod (BepInEx will not load it without `[BepInPlugin]`), `false` for the shared library, which deliberately has none |
 | `postInstall` | no | Up to four optional setup steps, offered one by one after installing — see below. Absent means none |
+| `approvedVersion` | no | The release tag a reviewer actually looked at, e.g. `v1.5.0`. See **Pinning and capabilities** |
+| `files[].sha256` | no | SHA-256 of that file in the approved release, recorded at review time |
+| `files[].capabilities` | no | What that file can reach outside the game process, as reported by `tools/scan-capabilities.ps1` |
 
 Keep entries alphabetical by repository name. At most 64 mods and 16 files per mod — caps, not targets.
 
@@ -91,10 +94,81 @@ Third-party repositories are welcome: set `owner` to your account. The launcher 
 entries with their owner in the list and names the repository again in the install confirmation,
 because unlike the project's own releases there is no shared review behind them.
 
+## Pinning and capabilities
+
+Three optional fields record what was actually reviewed. They are **additive**: `schemaVersion`
+stays at `1`, launchers that predate them ignore them, and nothing about installing changes
+until a launcher chooses to read them.
+
+```json
+{
+  "approvedVersion": "v0.1.0",
+  "files": [
+    {
+      "fileName": "SwyfModManager.dll",
+      "folder": "plugins",
+      "expectsPluginAttribute": true,
+      "sha256": "491f4a169888b8a0e120aa304c15cc4964be68c627b208c8a0f59df4e5750385",
+      "capabilities": ["base64", "dynamic-code", "filesystem-read", "filesystem-write", "process"]
+    }
+  ]
+}
+```
+
+### Why not scan for suspicious strings
+
+Because it does not work. A mod can build a command at runtime and base64 it, and the string
+never appears in the file. One listed mod legitimately does exactly that — scanning its strings
+returns `powershell.exe` and `*.dll`, and nothing else.
+
+Method references cannot be hidden that way: the callee is a metadata token, not text. So
+`tools/scan-capabilities.ps1` walks the IL and reports which host-reaching APIs an assembly
+references.
+
+| Capability | Means the file can |
+|---|---|
+| `process` | start other programs |
+| `network` | make network connections |
+| `filesystem-read` / `filesystem-write` | read or change files |
+| `native-interop` | call native code (P/Invoke, `Marshal`) |
+| `dynamic-code` | load or generate code at runtime. Near-universal in Unity modding, so low signal on its own |
+| `base64` | encode or decode base64 |
+| `registry`, `environment` | read the registry or environment |
+| `binary-serialization` | use `BinaryFormatter` |
+
+**This is not a safety verdict.** Most of these are things mods legitimately need — a mod that
+installs other mods has to write files, and this one has to start a process. The point is that a
+capability *appearing where it was not before* is impossible to miss.
+
+### The gate
+
+`tools/verify-catalogue.ps1` downloads each pinned release, checks the hash, rescans, and fails
+if the bytes or the capabilities moved. CI runs it on every pull request and weekly.
+
+The weekly run is the one that earns its keep: a git tag can be moved and a release asset can be
+replaced after the fact, so a pin that verified at merge time does not stay true by itself.
+
+```powershell
+./tools/verify-catalogue.ps1              # the gate
+./tools/verify-catalogue.ps1 -Update      # re-pin everything to current latest, then review the diff
+./tools/scan-capabilities.ps1 -Path x.dll -Detail
+```
+
+When a mod publishes a new release the gate fails, which is intended: someone reads the diff and,
+if it is fine, re-pins. A capability change is a prompt to look, not an accusation.
+
 ## Trust
 
 Listing here is curation, not a safety verdict. A merged entry means someone with merge access
-chose to point at that repository — nothing more. The launcher downloads over https, checks the
-download against the SHA-256 GitHub publishes (which catches corruption, not malice), and asks
-before writing anything into the game folder. Only install mods from authors you trust, listed
-or not.
+chose to point at that repository — nothing more.
+
+The SHA-256 that GitHub publishes alongside an asset is computed over whatever the author
+uploaded, so it catches corruption in transit, not substitution: a malicious release gets a
+perfectly valid digest. The `sha256` recorded here is different in kind, because it is written
+down at review time — it says *this is the file someone looked at*, which is the claim that
+actually matters.
+
+What it still cannot do is vouch for a first submission that was malicious from the start, or for
+an author's account being compromised. The launcher downloads over https, asks before writing
+anything into the game folder, and names third-party repositories in the confirmation. Only
+install mods from authors you trust, listed or not.

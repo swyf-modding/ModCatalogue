@@ -1,0 +1,36 @@
+name: Verify catalogue
+
+# Runs on changes, and weekly. The weekly run is the one that matters most: a git tag can be
+# moved and a release asset can be replaced after the fact, so a pin that verified at merge
+# time is not guaranteed to still describe the same bytes a month later.
+
+on:
+  pull_request:
+    paths:
+      - 'mods.json'
+      - 'tools/**'
+      - '.github/workflows/verify-catalogue.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'mods.json'
+      - 'tools/**'
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify pinned hashes and capabilities
+        shell: pwsh
+        env:
+          # Lifts the unauthenticated GitHub API limit from 60/hour to 1000/hour.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./tools/verify-catalogue.ps1
