@@ -6,9 +6,27 @@
       "repo": "AI-Backend",
       "displayName": "AI Backend",
       "summary": "Routes the game's AI calls to your own LLM - Ollama, LM Studio, llama.cpp, OpenAI, OpenRouter, vLLM, Groq - instead of the hosted backend.",
+      "approvedVersion": "v1.2.0",
       "files": [
-        { "fileName": "ScamWYF.AiBackend.dll", "folder": "plugins", "expectsPluginAttribute": true },
-        { "fileName": "ScamWYF.Modding.Core.dll", "folder": "core", "expectsPluginAttribute": false }
+        {
+          "fileName": "ScamWYF.AiBackend.dll",
+          "folder": "plugins",
+          "expectsPluginAttribute": true,
+          "sha256": "8afd00c45e8e425782ed6df7c86281e77a0f416c4394c346da9091de45544cb8",
+          "capabilities": [
+            "dynamic-code",
+            "network"
+          ]
+        },
+        {
+          "fileName": "ScamWYF.Modding.Core.dll",
+          "folder": "core",
+          "expectsPluginAttribute": false,
+          "sha256": "055a76daf457966ad78ea6c12e395dfb86880e65151f1f42b3c3cf7faffd8f8a",
+          "capabilities": [
+            "dynamic-code"
+          ]
+        }
       ]
     },
     {
@@ -16,11 +34,18 @@
       "repo": "Caller-Portrait-Importer",
       "displayName": "Caller Portrait Importer",
       "summary": "Import custom PNG and JPEG portraits into Character Creator with an in-game file explorer.",
+      "approvedVersion": "Stable",
       "files": [
         {
           "fileName": "CallerPortraitImporter.dll",
           "folder": "plugins",
-          "expectsPluginAttribute": true
+          "expectsPluginAttribute": true,
+          "sha256": "68393558ca25cf3c99900558f3b1a5aba6ec5ffc39904225cd2a5fa39877694d",
+          "capabilities": [
+            "dynamic-code",
+            "environment",
+            "filesystem-read"
+          ]
         }
       ]
     },
@@ -29,13 +54,26 @@
       "repo": "chaos-mode",
       "displayName": "Chaos Mode",
       "summary": "Party mod that fires random chaos events during your shift, with an optional Creator Mode where chat votes on what happens next. Host-only; friends don't need the mod.",
+      "approvedVersion": "v1.2",
       "files": [
-        { "fileName": "ChaosMode.dll", "folder": "plugins", "expectsPluginAttribute": true }
+        {
+          "fileName": "ChaosMode.dll",
+          "folder": "plugins",
+          "expectsPluginAttribute": true,
+          "sha256": "e2050f4f63f4a2b78b0fefd273c8a3661a1ac8544ee70a7259cc2e1058b70460",
+          "capabilities": [
+            "dynamic-code",
+            "filesystem-read",
+            "filesystem-write",
+            "network"
+          ]
+        }
       ],
       "postInstall": [
         {
           "script": "setup-chatbridge.ps1",
-          "description": "Downloads and installs ChatBridge so Creator Mode can read YouTube, TikTok and Kick chat and serve the OBS overlay. Skipping leaves the mod installed but Creator Mode locked."
+          "description": "Downloads and installs ChatBridge so Creator Mode can read YouTube, TikTok and Kick chat and serve the OBS overlay. Skipping leaves the mod installed but Creator Mode locked.",
+          "sha256": "144e1c9e21be198e6be2ffbecbfbc0ebe5e46c267fb02c61c86d9e682105fc91"
         }
       ]
     },
@@ -44,8 +82,17 @@
       "repo": "HostBoss",
       "displayName": "HostBoss",
       "summary": "Lets the lobby host control the boss presentation, slides, quota, quotes and recordings. Use the BepInEx plugin release; remove legacy HostBoss disk patches before switching.",
+      "approvedVersion": "v1.5.0",
       "files": [
-        { "fileName": "ScamWYF.HostBoss.dll", "folder": "plugins", "expectsPluginAttribute": true }
+        {
+          "fileName": "ScamWYF.HostBoss.dll",
+          "folder": "plugins",
+          "expectsPluginAttribute": true,
+          "sha256": "6b162ee227b855222ab2dee09d2869027c1583d79df1461d695b97a08e3ef8b2",
+          "capabilities": [
+            "dynamic-code"
+          ]
+        }
       ]
     },
     {
@@ -53,9 +100,27 @@
       "repo": "Mod-Handler",
       "displayName": "Mod Handler",
       "summary": "Adds a Plugins tab to the in-game menu (F1), listing every installed plugin with a switch for each.",
+      "approvedVersion": "v1.0.3",
       "files": [
-        { "fileName": "ScamWYF.ModHandler.dll", "folder": "plugins", "expectsPluginAttribute": true },
-        { "fileName": "ScamWYF.Modding.Core.dll", "folder": "core", "expectsPluginAttribute": false }
+        {
+          "fileName": "ScamWYF.ModHandler.dll",
+          "folder": "plugins",
+          "expectsPluginAttribute": true,
+          "sha256": "97d5e2eb79242fad8281d96f8118629ee3b21860346fcf59aadc896abcc85b96",
+          "capabilities": [
+            "filesystem-read",
+            "filesystem-write"
+          ]
+        },
+        {
+          "fileName": "ScamWYF.Modding.Core.dll",
+          "folder": "core",
+          "expectsPluginAttribute": false,
+          "sha256": "f852dae345b4289df915abdb9acc43f99eccfb5097eb265c9700fc1eb989348d",
+          "capabilities": [
+            "dynamic-code"
+          ]
+        }
       ]
     },
     {
@@ -63,8 +128,21 @@
       "repo": "SWYF-ModManager",
       "displayName": "Mod Manager",
       "summary": "Adds a MODS button to the main menu with a list of your installed mods. Turn each one on or off (using the launcher's plugins_disabled folder) and edit its settings in game, then restart with one click. F8 opens the same window anywhere.",
+      "approvedVersion": "v0.1.0",
       "files": [
-        { "fileName": "SwyfModManager.dll", "folder": "plugins", "expectsPluginAttribute": true }
+        {
+          "fileName": "SwyfModManager.dll",
+          "folder": "plugins",
+          "expectsPluginAttribute": true,
+          "sha256": "491f4a169888b8a0e120aa304c15cc4964be68c627b208c8a0f59df4e5750385",
+          "capabilities": [
+            "base64",
+            "dynamic-code",
+            "filesystem-read",
+            "filesystem-write",
+            "process"
+          ]
+        }
       ]
     },
     {
@@ -72,8 +150,17 @@
       "repo": "SWYF-SWAT",
       "displayName": "SWAT Mod",
       "summary": "When you fail the quota, you get swatted by police officers, if they catch you, you get reset back to Day 1.",
+      "approvedVersion": "V1.0.0",
       "files": [
-        { "fileName": "ScamWYF.SwatOnQuotaFail.dll", "folder": "plugins", "expectsPluginAttribute": true }
+        {
+          "fileName": "ScamWYF.SwatOnQuotaFail.dll",
+          "folder": "plugins",
+          "expectsPluginAttribute": true,
+          "sha256": "a5fe4cb9681495bd2905d0d97b969428af64c58fc4cf5931e81168ab8374f5a3",
+          "capabilities": [
+            "dynamic-code"
+          ]
+        }
       ]
     }
   ]
