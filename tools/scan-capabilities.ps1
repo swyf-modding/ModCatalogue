@@ -37,27 +37,60 @@ $ErrorActionPreference = 'Stop'
 
 # ---------------------------------------------------------------- Mono.Cecil
 
+# Mono.Cecil 0.11.5, lib/netstandard2.0/Mono.Cecil.dll. Pinned because this script loads it as
+# code: Add-Type runs it inside the maintainer's session. A cache under a world-writable temp
+# directory - /tmp on Linux and macOS - is something another local user can populate first, so the
+# cached copy is verified on every load, not only when it is first downloaded.
+$CecilSha256 = '9c2908709da6761e9b5b9d4d46102d65851145bac987787d6c5a05ffe5689487'
+
+function Get-FileSha256($path) {
+    (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+}
+
 function Get-Cecil {
     param([string]$Explicit)
     if ($Explicit) { return (Resolve-Path $Explicit).Path }
 
-    $cache = Join-Path ([IO.Path]::GetTempPath()) 'swyf-cecil-0.11.5'
+    # Per-user rather than the shared temp root, so the ordinary case is not a world-writable path.
+    $base = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA }
+            elseif ($env:XDG_CACHE_HOME) { $env:XDG_CACHE_HOME }
+            elseif ($env:HOME) { Join-Path $env:HOME '.cache' }
+            else { [IO.Path]::GetTempPath() }
+
+    $cache = Join-Path $base 'swyf-modding/cecil-0.11.5'
     $dll = Join-Path $cache 'Mono.Cecil.dll'
-    if (Test-Path $dll) { return $dll }
+
+    if (Test-Path $dll) {
+        if ((Get-FileSha256 $dll) -eq $CecilSha256) { return $dll }
+        Write-Warning "Cached Mono.Cecil did not match its pinned hash; discarding and downloading again."
+        Remove-Item $dll -Force
+    }
 
     New-Item -ItemType Directory -Force -Path $cache | Out-Null
-    $nupkg = Join-Path $cache 'cecil.zip'
-    Invoke-WebRequest -Uri 'https://www.nuget.org/api/v2/package/Mono.Cecil/0.11.5' -OutFile $nupkg -UseBasicParsing
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $zip = [IO.Compression.ZipFile]::OpenRead($nupkg)
+    $nupkg = Join-Path $cache ('cecil-' + [Guid]::NewGuid().ToString('N') + '.zip')
     try {
-        foreach ($e in $zip.Entries) {
-            if ($e.FullName -eq 'lib/netstandard2.0/Mono.Cecil.dll') {
-                [IO.Compression.ZipFileExtensions]::ExtractToFile($e, $dll, $true)
+        Invoke-WebRequest -Uri 'https://www.nuget.org/api/v2/package/Mono.Cecil/0.11.5' -OutFile $nupkg -UseBasicParsing
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [IO.Compression.ZipFile]::OpenRead($nupkg)
+        try {
+            foreach ($e in $zip.Entries) {
+                if ($e.FullName -eq 'lib/netstandard2.0/Mono.Cecil.dll') {
+                    [IO.Compression.ZipFileExtensions]::ExtractToFile($e, $dll, $true)
+                }
             }
-        }
-    } finally { $zip.Dispose() }
+        } finally { $zip.Dispose() }
+    } finally {
+        if (Test-Path $nupkg) { Remove-Item $nupkg -Force -ErrorAction SilentlyContinue }
+    }
+
     if (-not (Test-Path $dll)) { throw 'Could not obtain Mono.Cecil from nuget.org.' }
+
+    $actual = Get-FileSha256 $dll
+    if ($actual -ne $CecilSha256) {
+        Remove-Item $dll -Force -ErrorAction SilentlyContinue
+        throw "Mono.Cecil downloaded from nuget.org has sha256 $actual, not the pinned $CecilSha256. Refusing to load it."
+    }
+
     return $dll
 }
 
@@ -75,19 +108,34 @@ $Rules = [ordered]@{
     )
     'network' = @(
         'System.Net.WebClient::', 'System.Net.HttpWebRequest::', 'System.Net.Http.',
-        'System.Net.Sockets.', 'System.Net.Dns::', 'UnityEngine.Networking.UnityWebRequest::',
-        'System.Net.WebRequest::'
+        'System.Net.Sockets.', 'System.Net.Dns::', 'UnityEngine.Networking.UnityWebRequest',
+        'System.Net.WebRequest::', 'System.Net.FtpWebRequest::', 'System.Net.WebSockets.',
+        'UnityEngine.WWW::'
     )
+    # File::OpenWrite and File::Open(path, FileMode.Create) also match the read rule below. Counting
+    # an ambiguous call as both is the conservative answer: over-reporting a capability costs a
+    # reviewer a glance, under-reporting one hides a change.
     'filesystem-write' = @(
         'System.IO.File::Write', 'System.IO.File::Create', 'System.IO.File::Move',
         'System.IO.File::Delete', 'System.IO.File::Copy', 'System.IO.File::Append',
+        'System.IO.File::Open', 'System.IO.File::Replace', 'System.IO.File::SetAttributes',
         'System.IO.Directory::CreateDirectory', 'System.IO.Directory::Delete',
-        'System.IO.Directory::Move', 'System.IO.FileStream::.ctor'
+        'System.IO.Directory::Move', 'System.IO.FileStream::.ctor',
+        'System.IO.FileInfo::Create', 'System.IO.FileInfo::Delete', 'System.IO.FileInfo::MoveTo',
+        'System.IO.FileInfo::CopyTo', 'System.IO.FileInfo::OpenWrite', 'System.IO.FileInfo::Replace',
+        'System.IO.FileInfo::AppendText', 'System.IO.FileInfo::CreateText',
+        'System.IO.DirectoryInfo::Create', 'System.IO.DirectoryInfo::Delete',
+        'System.IO.DirectoryInfo::MoveTo',
+        'System.IO.StreamWriter::.ctor', 'System.IO.BinaryWriter::.ctor'
     )
     'filesystem-read' = @(
         'System.IO.File::Read', 'System.IO.File::Open', 'System.IO.File::Exists',
         'System.IO.Directory::GetFiles', 'System.IO.Directory::Exists',
-        'System.IO.Directory::EnumerateFiles'
+        'System.IO.Directory::EnumerateFiles', 'System.IO.Directory::GetDirectories',
+        'System.IO.FileInfo::OpenRead', 'System.IO.FileInfo::OpenText',
+        'System.IO.FileInfo::get_Exists', 'System.IO.DirectoryInfo::GetFiles',
+        'System.IO.DirectoryInfo::EnumerateFiles', 'System.IO.DirectoryInfo::get_Exists',
+        'System.IO.StreamReader::.ctor', 'System.IO.BinaryReader::.ctor'
     )
     'native-interop' = @(
         'System.Runtime.InteropServices.Marshal::'
