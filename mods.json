@@ -166,19 +166,6 @@
           ]
         }
       ]
-    },
-    {
-      "owner": "TIMOFEITV",
-      "repo": "ScamWYF-Twitch-Control",
-      "displayName": "SWYF Twitch Control",
-      "summary": "Let Twitch viewers join and control incoming scam calls through chat, with spoken replies, code interaction, and an optional OBS overlay. Also Includes shift-length settings.",
-      "files": [
-        {
-          "fileName": "ScamWYF.TwitchControl.dll",
-          "folder": "plugins",
-          "expectsPluginAttribute": true
-        }
-      ]
     }
   ]
 }
