@@ -6,13 +6,13 @@
       "repo": "AI-Backend",
       "displayName": "AI Backend",
       "summary": "Routes the game's AI calls to your own LLM - Ollama, LM Studio, llama.cpp, OpenAI, OpenRouter, vLLM, Groq - instead of the hosted backend.",
-      "approvedVersion": "v1.2.0",
+      "approvedVersion": "v1.2.1",
       "files": [
         {
           "fileName": "ScamWYF.AiBackend.dll",
           "folder": "plugins",
           "expectsPluginAttribute": true,
-          "sha256": "8afd00c45e8e425782ed6df7c86281e77a0f416c4394c346da9091de45544cb8",
+          "sha256": "3170b17b95d4ff5aaede070f9ee4cba5f341357a45b0e0364b4340d1d8202249",
           "capabilities": [
             "dynamic-code",
             "network"
@@ -22,9 +22,11 @@
           "fileName": "ScamWYF.Modding.Core.dll",
           "folder": "core",
           "expectsPluginAttribute": false,
-          "sha256": "055a76daf457966ad78ea6c12e395dfb86880e65151f1f42b3c3cf7faffd8f8a",
+          "sha256": "4af83549a60930ca522e79b19656432435c311b493fc10559a2a979b208d9711",
           "capabilities": [
-            "dynamic-code"
+            "dynamic-code",
+            "filesystem-read",
+            "filesystem-write"
           ]
         }
       ]
@@ -99,14 +101,14 @@
       "owner": "swyf-modding",
       "repo": "Mod-Handler",
       "displayName": "Mod Handler",
-      "summary": "Adds a Plugins tab to the in-game menu (F1), listing every installed plugin with a switch for each.",
-      "approvedVersion": "v1.0.3",
+      "summary": "Companion mod for the shared ScamWYF library - it ships the library that provides the in-game mod menu (F1), its Plugins tab and every mod's settings page.",
+      "approvedVersion": "v1.0.4",
       "files": [
         {
           "fileName": "ScamWYF.ModHandler.dll",
           "folder": "plugins",
           "expectsPluginAttribute": true,
-          "sha256": "97d5e2eb79242fad8281d96f8118629ee3b21860346fcf59aadc896abcc85b96",
+          "sha256": "dc8912a77396dc94e1a957cf778ac87bf08b1a1fef47bd11c160798e6f6a0796",
           "capabilities": [
             "filesystem-read",
             "filesystem-write"
@@ -116,9 +118,11 @@
           "fileName": "ScamWYF.Modding.Core.dll",
           "folder": "core",
           "expectsPluginAttribute": false,
-          "sha256": "f852dae345b4289df915abdb9acc43f99eccfb5097eb265c9700fc1eb989348d",
+          "sha256": "abb68816863a6bfcdd1d8ab716c2d783fa52065f2c9ec0961e98383cb80c378e",
           "capabilities": [
-            "dynamic-code"
+            "dynamic-code",
+            "filesystem-read",
+            "filesystem-write"
           ]
         }
       ]
