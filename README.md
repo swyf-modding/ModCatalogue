@@ -1,11 +1,11 @@
 # ModCatalogue
 
-The live mod list for the ScamWYF launcher's **Get mods** tab.
+The live mod list for Switchboard's **Get mods** tab.
 
-The launcher fetches `mods.json` from this repository's `main` branch on every check, so adding
-a mod means editing that file — not cutting a launcher release. Merging here reaches users
+Switchboard fetches `mods.json` from this repository's `main` branch on every check, so adding
+a mod means editing that file — not cutting a Switchboard release. Merging here reaches users
 immediately, which is also why the file is validated strictly: anything unexpected rejects the
-whole file and the launcher falls back to the list compiled into it, saying so on its status line.
+whole file and Switchboard falls back to the list compiled into it, saying so on its status line.
 
 ## The file
 
@@ -31,7 +31,7 @@ One JSON object with a schema version and an array of mods:
 
 | Field | Required | Rules |
 |---|---|---|
-| `schemaVersion` | yes | Must be `1`. Anything else and old launchers refuse the file rather than guess at it |
+| `schemaVersion` | yes | Must be `1`. Anything else and older Switchboard versions refuse the file rather than guess at it |
 | `owner` | no | A GitHub account name. Defaults to `swyf-modding` when absent |
 | `repo` | yes | A GitHub repository name: letters, digits, `.`, `-`, `_` — no URLs, no slashes |
 | `displayName` | yes | Up to 80 characters, shown in the list |
@@ -64,26 +64,26 @@ release zip** and a description shown in the prompt:
 
 | Field | Rules |
 |---|---|
-| `script` | A bare `.ps1` name — no folders, no `..` — resolved against the unpacked download. At most 64 KB, since the launcher shows it before asking |
+| `script` | A bare `.ps1` name — no folders, no `..` — resolved against the unpacked download. At most 64 KB, since Switchboard shows it before asking |
 | `description` | Up to 280 characters. Say what it does and what skipping costs; it is shown verbatim |
 
-The launcher offers each step separately after the files are installed, shows the script, and defaults
+Switchboard offers each step separately after the files are installed, shows the script, and defaults
 to skipping — denying everything leaves the install as it was. A declared script the release does not
 contain fails the install rather than being fetched from anywhere else. Scripts receive the game
 folder as `-GameDir` and run with the download as their working directory.
 
 ## Getting your mod listed
 
-Open a pull request editing `mods.json`. Your mod must already be installable by the launcher's
+Open a pull request editing `mods.json`. Your mod must already be installable by Switchboard's
 rules, because the entry only *names* it — the checks below still apply at install time:
 
-1. **A public GitHub repository with versioned releases.** The launcher reads `releases/latest`,
+1. **A public GitHub repository with versioned releases.** Switchboard reads `releases/latest`,
    which ignores prereleases, so publish finished releases. Every release needs a downloadable
    `.zip` asset; a release with no zip cannot be installed from and is reported as such.
 2. **Plugin DLLs the loader will actually load.** Each one carries a `[BepInPlugin]` attribute
    whose version BepInEx can parse: two to four dot-separated numbers, no letters, no `+` or `-`.
    A SemVer build-metadata version (`1.2.3+g0a1b2c3`) is valid SemVer and unloadable by BepInEx —
-   the launcher flags it in the list rather than installing something that silently does nothing.
+   Switchboard flags it in the list rather than installing something that silently does nothing.
 3. **The shared library routed to `core`, if you ship one.** `ScamWYF.Modding.Core.dll` goes in
    `core` with `expectsPluginAttribute: false`. In `plugins` the chainloader would try to load it
    as a plugin and the install would break in a way nothing explains.
@@ -91,15 +91,15 @@ rules, because the entry only *names* it — the checks below still apply at ins
    the files, their versions read out of the binaries, and anything they would replace — there is
    no field here that overrides what is actually in the download.
 
-Third-party repositories are welcome: set `owner` to your account. The launcher marks those
+Third-party repositories are welcome: set `owner` to your account. Switchboard marks those
 entries with their owner in the list and names the repository again in the install confirmation,
 because unlike the project's own releases there is no shared review behind them.
 
 ## Pinning and capabilities
 
 Three optional fields record what was actually reviewed. They are **additive**: `schemaVersion`
-stays at `1`, launchers that predate them ignore them, and nothing about installing changes
-until a launcher chooses to read them.
+stays at `1`, Switchboard versions that predate them ignore them, and nothing about installing changes
+until a Switchboard version chooses to read them.
 
 ```json
 {
@@ -141,7 +141,7 @@ A pinned entry must pin **everything it installs**, including setup scripts. A s
 PowerShell that runs on the machine, shipped in the same replaceable release asset as the DLLs,
 and it is the only catalogue-declared thing that reaches a shell — so leaving it unpinned while
 calling the release reviewed would put the loudest part of an install outside the only check. The
-launcher refuses an `approvedVersion` whose files or scripts are missing a hash, rather than
+Switchboard refuses an `approvedVersion` whose files or scripts are missing a hash, rather than
 quietly treating it as reviewed.
 
 **This is not a safety verdict.** Most of these are things mods legitimately need — a mod that
@@ -177,6 +177,6 @@ down at review time — it says *this is the file someone looked at*, which is t
 actually matters.
 
 What it still cannot do is vouch for a first submission that was malicious from the start, or for
-an author's account being compromised. The launcher downloads over https, asks before writing
+an author's account being compromised. Switchboard downloads over https, asks before writing
 anything into the game folder, and names third-party repositories in the confirmation. Only
 install mods from authors you trust, listed or not.

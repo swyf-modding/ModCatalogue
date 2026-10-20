@@ -167,9 +167,9 @@ foreach ($mod in $cat.mods) {
 Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 
 if ($Update) {
-    # schemaVersion stays as it is. The shipped launcher hard-fails on anything but 1
+    # schemaVersion stays as it is. The shipped Switchboard hard-fails on anything but 1
     # (`if (schema != 1) throw`), while ignoring fields it does not know - so the pins
-    # below are additive and safe. Bump only once a launcher that reads them has shipped.
+    # below are additive and safe. Bump only once a Switchboard version that reads them has shipped.
     # Windows PowerShell 5.1 writes a BOM and eccentric indentation here; pwsh 7 is clean.
     # Either way the bytes are valid JSON - reformat before committing if it looks odd.
     $json = ($cat | ConvertTo-Json -Depth 10).TrimEnd() + "`n"
