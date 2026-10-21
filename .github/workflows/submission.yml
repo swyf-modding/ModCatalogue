@@ -1,0 +1,107 @@
+name: Process a mod submission
+
+# A submission arrives as an issue, written by the website. This workflow is what makes
+# it a listing without asking the person to open a pull request: it checks the release,
+# reads the code, and opens the pull request with the checked entry.
+#
+# The merge is still a maintainer's. A catalogue is a list of code people install, and
+# the step that puts an entry in it is one a person should be able to see and undo.
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+  workflow_dispatch:
+    inputs:
+      body:
+        description: 'The submission body, as the website wrote it.'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  process:
+    # Only the issues the website writes, and only ones that are really a submission.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.issue.title, 'Mod submission:')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get the submission
+        id: submission
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          MANUAL_BODY: ${{ inputs.body }}
+        run: |
+          $body = if ($env:MANUAL_BODY) { $env:MANUAL_BODY } else { $env:ISSUE_BODY }
+          if (-not $body) { throw 'The submission has no body.' }
+          if ($body -notmatch 'swyf-modding-submission') {
+            throw 'This issue is not a submission: it does not carry the marker the site writes.'
+          }
+          'body<<BODY_EOF' >> $env:GITHUB_OUTPUT
+          $body >> $env:GITHUB_OUTPUT
+          'BODY_EOF' >> $env:GITHUB_OUTPUT
+
+      - name: Check the release and read the code
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BODY: ${{ steps.submission.outputs.body }}
+        run: ./tools/submission.ps1 -Body $env:BODY -OutDir ./out
+
+      # ------------------------------------------------------------------ the review
+      #
+      # This is where an AI agent reads out/submission-report.md and says whether the
+      # mod looks right: whether the summary describes what the code does, whether the
+      # capabilities are what the summary implies, and whether anything about the
+      # release is odd.
+      #
+      # It is not here yet, and the step is deliberately inert rather than a mock that
+      # could be mistaken for a review. When it is added it has to be a step that can
+      # refuse: a submission it is unsure about should stop, not be listed.
+      #
+      # The agent would read ./out/submission-report.md and the mod's own repository,
+      # and write ./out/review.md with a verdict and its reasons. The step below
+      # refuses the pull request if that file is missing or does not say it passed.
+      - name: Review the submission
+        shell: pwsh
+        run: |
+          if (Test-Path ./out/review.md) {
+            Write-Host 'A review was found:'
+            Get-Content ./out/review.md
+          } else {
+            Write-Host 'No AI review yet - the checks above are the gate for now.' -ForegroundColor Yellow
+          }
+
+      - name: Open the pull request
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $branch = 'submission/' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+          git config user.name 'swyf-modding-bot'
+          git config user.email 'bot@swyf-modding.invalid'
+          git checkout -b $branch
+          Copy-Item ./out/mods.json ./mods.json -Force
+          git add mods.json
+          git commit -m 'Add a mod from a submission: ${{ github.event.issue.title }}'
+          git push -u origin $branch
+
+          $body = @"
+          A mod submission, processed automatically.
+
+          The entry below was filled in and checked by the website, the release was
+          downloaded and read, and the file hashes and capabilities in it come from the
+          code itself.
+
+          $(Get-Content -Raw ./out/submission-report.md)
+          "@
+
+          gh pr create --title '${{ github.event.issue.title }}' --body $body --base main --head $branch

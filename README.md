@@ -74,8 +74,32 @@ folder as `-GameDir` and run with the download as their working directory.
 
 ## Getting your mod listed
 
-Open a pull request editing `mods.json`. Your mod must already be installable by Switchboard's
-rules, because the entry only *names* it — the checks below still apply at install time:
+**Send it from the website.** The Submit page takes an owner, a repository and a release, and
+reads the rest from GitHub: that the release is one Switchboard can install from, that it holds a
+zip, and which files are inside it. The entry is built from that, and the checks are shown as they
+are made. Sending it is one click, and you are not asked to write a pull request.
+
+What happens after you send it:
+
+1. **The release is downloaded and the code is read.** `tools/submission.ps1` fetches the release
+   and runs `tools/scan-capabilities.ps1` over it — the same scan `verify-catalogue.ps1` uses — so
+   the entry records each file's hash and what it can reach. A capability that appears between two
+   releases cannot pass unnoticed.
+2. **The entry is checked against the code.** Every file the entry names has to be in the release,
+   every assembly in the release has to be named by the entry, the shared library has to be routed
+   to `core`, and every plugin has to carry the `[BepInPlugin]` attribute the loader reads. Half an
+   entry is how a mod ends up installed with its library missing.
+3. **A pull request is opened** with the checked entry and the scan results, for a maintainer to
+   merge. The merge is still a person's: this is a list of code people install, and the step that
+   puts an entry in it is one somebody should be able to see and undo.
+
+The listing can also be reviewed by a model, which reads the scan results and the entry and says
+whether the summary describes what the code does. It is not a safety verdict and does not pretend to
+be one; it holds a submission back when it is unsure, and a submission that is not listed is a
+nuisance while one that is listed and should not have been is a mod running in somebody's game.
+
+Your mod must already be installable by Switchboard's rules, because the entry only *names* it —
+the checks below still apply at install time:
 
 1. **A public GitHub repository with versioned releases.** Switchboard reads `releases/latest`,
    which ignores prereleases, so publish finished releases. Every release needs a downloadable
@@ -94,6 +118,14 @@ rules, because the entry only *names* it — the checks below still apply at ins
 Third-party repositories are welcome: set `owner` to your account. Switchboard marks those
 entries with their owner in the list and names the repository again in the install confirmation,
 because unlike the project's own releases there is no shared review behind them.
+
+### Doing it by hand instead
+
+An entry is a pull request editing `mods.json`, and it can still be made that way. The checks the
+website runs are the same ones `tools/submission.ps1` runs, so an entry written by hand is held to
+exactly the same rules — the difference is only that the file names are typed rather than read out
+of the release, and that the hashes and capabilities have to be filled in by hand or by
+`tools/scan-capabilities.ps1`.
 
 ## Pinning and capabilities
 
@@ -160,10 +192,20 @@ replaced after the fact, so a pin that verified at merge time does not stay true
 ./tools/verify-catalogue.ps1              # the gate
 ./tools/verify-catalogue.ps1 -Update      # re-pin everything to current latest, then review the diff
 ./tools/scan-capabilities.ps1 -Path x.dll -Detail
+./tools/submission.ps1 -Body $body        # check a submission and write the new catalogue
 ```
 
 When a mod publishes a new release the gate fails, which is intended: someone reads the diff and,
 if it is fine, re-pins. A capability change is a prompt to look, not an accusation.
+
+`tools/submission.ps1` is the other half: it is what the workflow runs when a submission arrives.
+It downloads the release, reads the code, checks the entry against both, and writes the new
+catalogue and a report. It commits nothing — the workflow opens the pull request from what it
+writes, so a maintainer still merges it.
+
+```powershell
+./tools/submission.ps1 -Body (Get-Content -Raw submission.md) -OutDir ./out
+```
 
 ## Trust
 
