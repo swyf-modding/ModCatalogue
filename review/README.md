@@ -90,8 +90,7 @@ The default is `review-jev.ts`, which sends the prompt and the facts to
 [Jev](https://jev.typesafe.ai) via [OpenRouter](https://openrouter.ai).
 Jev is a System One model: it takes unstructured text plus a set of questions
 and returns structured, typed decisions — exactly what a review needs. It works
-headless in a container with an API key (`OPENROUTER_API_KEY`), unlike an
-interactive CLI that needs a person to log in.
+headless in a container with an API key (`OPENROUTER_API_KEY`).
 
 Set the model with `REVIEW_MODEL` (default `typesafe/jev`):
 
@@ -106,7 +105,27 @@ and that is the whole list.
 If that ever stops working, the fix is in `service/review-jev.ts` and nowhere
 else, because it is the only place that knows how the agent is invoked.
 
-Swapping in a different agent is one variable:
+## Using OpenCode instead
+
+OpenCode provides free models (including Jev) through OpenRouter, so it can be
+the review agent too. Point `REVIEW_COMMAND` at `review-opencode.ts`:
+
+```sh
+-e REVIEW_COMMAND=/app/service/review-opencode.ts
+```
+
+Auth is the same `OPENROUTER_API_KEY` that OpenCode reads from the environment
+for its free models — there is no separate OpenCode login. OpenCode is an
+interactive terminal agent by design, so this runner is a thin wrapper around
+its CLI: it hands the review prompt and facts to `opencode` on stdin/stdout and
+parses the verdict JSON from what comes back.
+
+```sh
+-e OPENROUTER_API_KEY=sk-or-... \
+-e REVIEW_COMMAND=/app/service/review-opencode.ts
+```
+
+Swapping in yet another agent is one variable:
 
 ```sh
 -e REVIEW_COMMAND=/app/service/review-something-else.ts

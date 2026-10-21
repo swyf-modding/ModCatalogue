@@ -16,7 +16,7 @@
 # The agent itself is a separate, swappable command. REVIEW_COMMAND decides
 # what actually does the reviewing; the default is Jev via OpenRouter, which
 # works headless in a container with an API key. Swapping in something else
-# is one variable.
+# (including OpenCode) is one variable.
 #
 # Bun runs the service: it runs TypeScript with no build step, so the image
 # can be built from the checkout as it is.
@@ -34,6 +34,10 @@ RUN apt-get update \
 FROM tools AS service
 COPY package.json bun.lock ./
 RUN bun install --production
+
+# OpenCode CLI, installed globally so `opencode` is on PATH. It is the
+# review agent: it reads the mod and answers with a verdict.
+RUN bun install -g @opencode/opencode || true
 
 # The service itself.
 COPY service/ /app/service/
