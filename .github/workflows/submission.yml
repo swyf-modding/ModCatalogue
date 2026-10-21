@@ -54,8 +54,11 @@ jobs:
 
           if ($env:MANUAL_BODY) {
             'subject=Mod submission: manual' >> $env:GITHUB_OUTPUT
+            'repo=' >> $env:GITHUB_OUTPUT
           } else {
             'subject=' + $env:ISSUE_TITLE >> $env:GITHUB_OUTPUT
+            # The repository out of the title, which is "Mod submission: <repo>".
+            'repo=' + ($env:ISSUE_TITLE -replace '^Mod submission:\s*', '') >> $env:GITHUB_OUTPUT
           }
 
       - name: Check the release and read the code
@@ -66,26 +69,69 @@ jobs:
 
       # ------------------------------------------------------------------ the review
       #
-      # This is where an AI agent reads out/submission-report.md and says whether the
-      # mod looks right: whether the summary describes what the code does, whether the
-      # capabilities are what the summary implies, and whether anything about the
-      # release is odd.
+      # The review is a container, not a step in this workflow. It reads the mod's code and
+      # never runs it, and it is the only thing here that knows how to ask a model anything.
       #
-      # It is not here yet, and the step is deliberately inert rather than a mock that
-      # could be mistaken for a review. When it is added it has to be a step that can
-      # refuse: a submission it is unsure about should stop, not be listed.
+      # REVIEW_URL points at it. Without one the submission is listed on the checks alone,
+      # which is what happens today and is a deliberate choice rather than an accident.
       #
-      # The agent would read ./out/submission-report.md and the mod's own repository,
-      # and write ./out/review.md with a verdict and its reasons. The step below
-      # refuses the pull request if that file is missing or does not say it passed.
+      # The verdict has to be "ok". "unsure" holds the submission back for a person, and
+      # "refuse" stops it: a submission that is not listed is a nuisance, and one that is
+      # listed and should not have been is a mod running in somebody's game.
       - name: Review the submission
         shell: pwsh
+        env:
+          REVIEW_URL: ${{ vars.REVIEW_URL }}
+          SUBJECT_REPO: ${{ steps.submission.outputs.repo }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if (Test-Path ./out/review.md) {
-            Write-Host 'A review was found:'
-            Get-Content ./out/review.md
-          } else {
-            Write-Host 'No AI review yet - the checks above are the gate for now.' -ForegroundColor Yellow
+          if (-not $env:REVIEW_URL) {
+            Write-Host 'No review service is configured; the checks above are the gate.' -ForegroundColor Yellow
+            exit 0
+          }
+
+          $catalogue = Get-Content -Raw ./out/mods.json | ConvertFrom-Json
+          $mod = $catalogue.mods | Where-Object { $_.repo -eq $env:SUBJECT_REPO } | Select-Object -First 1
+          if (-not $mod) {
+            Write-Host 'The entry is not in the new catalogue; nothing to review.'
+            exit 0
+          }
+
+          $body = @{
+            mods = @(@{
+              owner      = $mod.owner
+              repo       = $mod.repo
+              release    = $mod.approvedVersion
+              displayName = $mod.displayName
+              summary    = $mod.summary
+              files      = @($mod.files | ForEach-Object {
+                @{ fileName = $_.fileName; sha256 = $_.sha256; capabilities = @($_.capabilities) }
+              })
+            })
+          } | ConvertTo-Json -Depth 8
+
+          $headers = @{ 'x-github-token' = $env:GH_TOKEN }
+          $response = Invoke-RestMethod -Uri "$env:REVIEW_URL/review" -Method Post -ContentType 'application/json' -Headers $headers -Body $body
+          $job = $response.id
+          if (-not $job) { throw 'The review service did not return a job id.' }
+
+          # The review takes as long as a model takes, so the answer is fetched
+          # rather than waited for: the request starts the job and comes back,
+          # and this asks again until it is done.
+          $result = $null
+          for ($i = 0; $i -lt 120; $i++) {
+            Start-Sleep -Seconds 10
+            $poll = Invoke-RestMethod -Uri "$env:REVIEW_URL/result?id=$job" -Headers $headers
+            if (-not $poll.pending) { $result = $poll; break }
+          }
+          if (-not $result) { throw 'The review did not finish.' }
+
+          $verdict = $result.results | Select-Object -First 1
+          Write-Host "verdict: $($verdict.verdict) - $($verdict.reason)"
+          Set-Content -LiteralPath ./out/review.md -Value "**$($verdict.verdict)** - $($verdict.reason)"
+
+          if ($verdict.verdict -ne 'ok') {
+            throw "The review held this one back: $($verdict.reason). Nothing was listed."
           }
 
       - name: Open the pull request
@@ -123,6 +169,8 @@ jobs:
           the code itself.
 
           $(Get-Content -Raw ./out/submission-report.md)
+
+          $(if (Test-Path ./out/review.md) { "`n### Review`n`n$(Get-Content -Raw ./out/review.md)" } else { "" })
           "@
 
           gh pr create --title $env:SUBJECT --body $body --base main --head $branch

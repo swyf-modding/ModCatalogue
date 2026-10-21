@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    // The DOM lib is here for the web standard globals - fetch, Request,
+    // Response, URL, TextDecoder - which are the same ones a Worker has.
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "types": ["bun"]
+  },
+  "include": ["service"]
+}

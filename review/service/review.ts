@@ -1,0 +1,430 @@
+// Staging a mod for review, and asking for a verdict.
+//
+// The mod's code is downloaded and read. It is never run: the files are staged
+// read-only, and the review runs somewhere else.
+//
+// The review command is a separate program, named by REVIEW_COMMAND, and it
+// is given a directory and a prompt and has to leave a verdict.json behind.
+// That is the whole contract, so the agent can be swapped without touching
+// anything else.
+//
+// Plain TypeScript, run by Bun: no build step, no compile before it can start.
+
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, mkdir, chmod, readdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+import { inflateRawSync } from "node:zlib";
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+
+const GITHUB_API = "https://api.github.com";
+const MAX_ZIP_BYTES = 256 * 1024 * 1024;
+
+/** One file the review knows about, as the catalogue's scan found it. */
+export interface ReviewFile {
+  fileName: string;
+  sha256: string;
+  capabilities: string[];
+  /** What its [BepInPlugin] attribute says, when it has one. */
+  bepInPlugin?: string[];
+}
+
+/** A mod to review, as the workflow found it. */
+export interface ModToReview {
+  owner: string;
+  repo: string;
+  release: string;
+  displayName: string;
+  summary: string;
+  files: ReviewFile[];
+}
+
+export interface Verdict {
+  verdict: "ok" | "unsure" | "refuse";
+  reason: string;
+  /** The files the agent says it read, when it says. */
+  read?: string[];
+}
+
+/** The task the agent is given. */
+export function buildPrompt(mod: ModToReview): string {
+  const files = mod.files
+    .map(
+      (f) =>
+        `- ${f.fileName}  sha256 ${f.sha256}\n` +
+        `  capabilities: ${
+          f.capabilities.length
+            ? f.capabilities.join(", ")
+            : "none - it touches nothing outside the game process"
+        }\n` +
+        (f.bepInPlugin && f.bepInPlugin.length
+          ? `  declares: ${f.bepInPlugin.join(" | ")}\n`
+          : "  declares no [BepInPlugin] attribute\n"),
+    )
+    .join("");
+
+  return [
+    "Review this game modification for a public catalogue. This is a REVIEW, not a change.",
+    "",
+    "Do not modify, build, run, install or test anything. Do not run the mod's code. Read only.",
+    "",
+    "Answer whether the catalogue entry is honest and complete, and nothing else:",
+    "",
+    "  - does the summary describe what the code does?",
+    "  - do the capabilities account for what the code appears to reach?",
+    "  - is there anything here a player would not expect a mod to do?",
+    "",
+    "The release is in ./mod and the source is in ./source. The facts below were read",
+    "out of the binaries by the same scan the catalogue's own gate uses.",
+    "",
+    "## The mod",
+    `Repository: ${mod.owner}/${mod.repo}`,
+    `Release: ${mod.release}`,
+    `Display name: ${mod.displayName}`,
+    `Summary: ${mod.summary}`,
+    "",
+    "## What the binaries say",
+    files,
+    "",
+    "## What to answer",
+    "",
+    "Answer with JSON only, and nothing else:",
+    "",
+    '{ "verdict": "ok" | "unsure" | "refuse", "reason": "one sentence", "read": ["the files you read"] }',
+    "",
+    '"ok" only if the entry is consistent and honestly described.',
+    '"unsure" if anything does not add up, or if you cannot tell.',
+    '"refuse" if something in it should stop a player installing it.',
+    "",
+    "An unsure answer holds the submission back for a person. That is the right answer when",
+    "you are not certain - a submission that is not listed is a nuisance, and one that is",
+    "listed and should not have been is a mod running in somebody's game.",
+  ].join("\n");
+}
+
+/** Run a command, capture its output, and never let a failure be silent. */
+function run(
+  file: string,
+  args: string[],
+  options: { cwd?: string; timeout?: number; maxBuffer?: number; env?: Record<string, string> } = {},
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      file,
+      args,
+      {
+        cwd: options.cwd,
+        timeout: options.timeout,
+        maxBuffer: options.maxBuffer ?? 8 * 1024 * 1024,
+        env: { ...process.env, TERM: "dumb", NO_COLOR: "1" },
+      },
+      (error, stdout, stderr) => {
+        if (error) reject(error);
+        else resolve(`${stdout}\n${stderr}`);
+      },
+    );
+  });
+}
+
+/** Download the release's zip. It is opened, never run. */
+async function downloadRelease(
+  mod: ModToReview,
+  workDir: string,
+  token?: string,
+): Promise<Uint8Array | null> {
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "swyf-modding-review",
+  };
+  // A token raises the GitHub limit from 60 calls an hour to 5000, and a review
+  // makes two calls - the release and the catalogue - so a review is a thing
+  // that wants one.
+  if (token ?? process.env.GITHUB_TOKEN) {
+    headers.Authorization = `Bearer ${token ?? process.env.GITHUB_TOKEN}`;
+  }
+
+  const response = await fetch(
+    `${GITHUB_API}/repos/${mod.owner}/${mod.repo}/releases/tags/${encodeURIComponent(mod.release)}`,
+    { headers },
+  );
+  if (!response.ok) return null;
+
+  const body = (await response.json()) as {
+    assets?: { name?: string; browser_download_url?: string; size?: number }[];
+  };
+  const zip = (body.assets ?? []).find(
+    (a) => typeof a.name === "string" && a.name.toLowerCase().endsWith(".zip"),
+  );
+  if (!zip?.browser_download_url) return null;
+
+  const declared = Number(zip.size ?? 0);
+  if (declared > MAX_ZIP_BYTES) return null;
+
+  const download = await fetch(zip.browser_download_url, { headers });
+  if (!download.ok) return null;
+
+  const bytes = new Uint8Array(await download.arrayBuffer());
+  if (bytes.length > MAX_ZIP_BYTES) return null;
+
+  return bytes;
+}
+
+/**
+ * Unpack a zip, reading it with node's own zlib.
+ *
+ * Node has no zip in the standard library, but a zip's entries are either stored or
+ * deflated, and zlib can inflate a raw deflate stream. Doing it here rather than
+ * shelling out to unzip means there is no system program to be missing from the
+ * image, and a failure is a failure rather than a silently empty directory.
+ */
+async function unpack(zipBytes: Uint8Array, modDir: string): Promise<string[]> {
+  await mkdir(modDir, { recursive: true });
+
+  const view = new DataView(zipBytes.buffer, zipBytes.byteOffset, zipBytes.byteLength);
+
+  // The end-of-central-directory record is at the end, after an optional comment, so it
+  // is found by scanning backwards for its signature.
+  let eocd = -1;
+  for (let i = zipBytes.length - 22; i >= 0 && i > zipBytes.length - 22 - 65536; i--) {
+    if (view.getUint32(i, true) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) return [];
+
+  const count = view.getUint16(eocd + 10, true);
+  let offset = view.getUint32(eocd + 16, true);
+
+  const names: string[] = [];
+  for (let i = 0; i < count; i++) {
+    if (offset + 46 > zipBytes.length) break;
+    if (view.getUint32(offset, true) !== 0x02014b50) break;
+
+    const method = view.getUint16(offset + 10, true);
+    const compressedSize = view.getUint32(offset + 20, true);
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const localOffset = view.getUint32(offset + 42, true);
+
+    const name = new TextDecoder().decode(
+      zipBytes.subarray(offset + 46, offset + 46 + nameLength),
+    );
+
+    if (!name.endsWith("/")) {
+      // The local header has its own name and extra lengths, which are the ones that
+      // decide where the data starts.
+      const localNameLength = view.getUint16(localOffset + 26, true);
+      const localExtraLength = view.getUint16(localOffset + 28, true);
+      const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+      const data = zipBytes.subarray(dataStart, dataStart + compressedSize);
+
+      let content: Buffer | null;
+      try {
+        content = method === 0 ? Buffer.from(data) : method === 8 ? inflateRawSync(data) : null;
+      } catch {
+        content = null;
+      }
+
+      if (content) {
+        // A zip can name a file outside its own tree; the review is not going to be
+        // the thing that writes one.
+        const parts = name.split("/").filter((part) => part && part !== "..");
+        if (parts.length) {
+          const target = join(modDir, ...parts);
+          mkdirSync(dirname(target), { recursive: true });
+          writeFileSync(target, content);
+          names.push(parts.join("/"));
+        }
+      }
+    }
+
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+
+  // Read-only, so nothing the agent does can change what it is reviewing.
+  await run("chmod", ["-R", "a-w", modDir], { timeout: 10_000 }).catch(() => undefined);
+
+  return names;
+}
+
+/**
+ * Stage the mod's source, read-only.
+ *
+ * The release holds binaries, and the question the review asks - does the summary
+ * describe what the code does? - cannot be answered from binaries. So the source
+ * is cloned at the release's tag and put where the agent can read it.
+ *
+ * A clone does not run the code it fetches: there are no remote hooks in git, and
+ * nothing in the tree is built or started. It is a copy, and it is then made
+ * read-only.
+ */
+async function stageSource(mod: ModToReview, workDir: string): Promise<string[]> {
+  const dir = join(workDir, "source");
+  const url = `https://github.com/${mod.owner}/${mod.repo}.git`;
+
+  try {
+    await run("git", ["clone", "--depth", "1", "--quiet", "--branch", mod.release, url, dir], {
+      timeout: 5 * 60_000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+  } catch {
+    // No git, no tag, or a repository that does not have one. The review can still
+    // be done on the binaries and the facts, and the prompt says so.
+    return [];
+  }
+
+  await run("chmod", ["-R", "a-w", dir], { timeout: 10_000 }).catch(() => undefined);
+
+  const names: string[] = [];
+  const walk = async (current: string, prefix = ""): Promise<void> => {
+    let entries;
+    try {
+      entries = await readdir(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name === ".git") continue;
+      const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) await walk(join(current, entry.name), name);
+      else names.push(name);
+    }
+  };
+  await walk(dir);
+
+  return names;
+}
+
+/**
+ * Read a verdict out of what the agent printed.
+ *
+ * The agent is asked to answer with JSON only, but an agent that also narrates
+ * is an agent, so the last JSON object in the output is taken rather than the
+ * only one. An answer that is not a verdict is not a pass: it is held back.
+ *
+ * One place for this, because both the agent's driver and the service read the
+ * answer, and two places would be two opinions about what an answer means.
+ */
+export function extractVerdict(output: string): Verdict | null {
+  const candidates = [...output.matchAll(/\{[^{}]*"verdict"[^{}]*\}/gs)].map((m) => m[0]);
+
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    let parsed: { verdict?: unknown; reason?: unknown; read?: unknown };
+    try {
+      parsed = JSON.parse(candidates[i]) as typeof parsed;
+    } catch {
+      continue;
+    }
+
+    if (typeof parsed.verdict !== "string") continue;
+
+    return {
+      verdict: parsed.verdict === "ok" || parsed.verdict === "refuse" ? parsed.verdict : "unsure",
+      reason: typeof parsed.reason === "string" ? parsed.reason : "",
+      read: Array.isArray(parsed.read) ? parsed.read.filter((r) => typeof r === "string") : undefined,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Read a verdict.json and check that it is a verdict.
+ *
+ * A verdict file is the answer, so it goes through the same reading as the
+ * answer itself: a file that says something else is not a verdict.
+ */
+export function parseVerdict(text: string): Verdict | null {
+  return extractVerdict(text);
+}
+
+/**
+ * Review one mod.
+ *
+ * Returns the verdict, or an "unsure" saying why it could not be reviewed.
+ * It never throws: one mod failing to review is not a reason for the rest to
+ * be refused, and it is not a reason for the service to be down.
+ */
+export async function reviewMod(
+  mod: ModToReview,
+  options: { token?: string } = {},
+): Promise<Verdict> {
+  let workDir: string | null = null;
+
+  try {
+    workDir = await mkdtemp(join(tmpdir(), "swyf-review-"));
+    const modDir = join(workDir, "mod");
+    await mkdir(modDir, { recursive: true });
+
+    const zipBytes = await downloadRelease(mod, workDir, options.token);
+    const fileNames = zipBytes ? await unpack(zipBytes, modDir) : [];
+
+    const sourceNames = await stageSource(mod, workDir);
+
+    await Bun.write(join(workDir, "prompt.md"), buildPrompt(mod));
+    await Bun.write(
+      join(workDir, "facts.json"),
+      JSON.stringify({ mod, files: fileNames, source: sourceNames }, null, 2),
+    );
+
+    // The agent runs with the mod as read-only input and the working
+    // directory somewhere it can write, so anything it produces is separate
+    // from what it is reviewing.
+    await chmod(workDir, 0o755);
+
+    const command = process.env.REVIEW_COMMAND ?? "/app/service/review-freebuff.ts";
+    await run(process.execPath, [command, workDir], {
+      cwd: workDir,
+      timeout: 15 * 60_000,
+      maxBuffer: 8 * 1024 * 1024,
+      // The agent is told not to run anything, and this makes it a little harder.
+      env: { ...process.env, REVIEW_MODEL: process.env.REVIEW_MODEL ?? "", REVIEW_READ_ONLY_DIR: modDir },
+    });
+
+    // The agent is asked for JSON only, but if it narrated, the last JSON object
+    // in what it printed is the verdict. The transcript is supplementary: a
+    // driver that writes a verdict and no transcript is still a verdict.
+    const verdict = parseVerdict(
+      readFileSync(join(workDir, "verdict.json"), "utf8") +
+        "\n" +
+        (existsSync(join(workDir, "agent-output.txt"))
+          ? readFileSync(join(workDir, "agent-output.txt"), "utf8")
+          : ""),
+    );
+
+    // A review that could not read the code is not a review. If nothing arrived -
+    // no release and no source - then the answer is "unsure" whatever the agent
+    // said, because it said it about a summary and a list of hashes.
+    if (!verdict) {
+      return {
+        verdict: "unsure",
+        reason: "the review did not produce a verdict, so the submission is held back for a person",
+      };
+    }
+
+    if (verdict.verdict === "ok" && fileNames.length === 0 && sourceNames.length === 0) {
+      return {
+        verdict: "unsure",
+        reason:
+          "the review could not read the mod's code - neither the release nor the source could be " +
+          "fetched - so it is held back for a person",
+        read: [],
+      };
+    }
+
+    return {
+      verdict: verdict.verdict,
+      reason: verdict.reason || "no reason given",
+      read: verdict.read,
+    };
+  } catch (error) {
+    return {
+      verdict: "unsure",
+      reason: `the review could not be run: ${(error as Error).message}`,
+    };
+  } finally {
+    if (workDir) await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}

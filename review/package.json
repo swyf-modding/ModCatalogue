@@ -1,0 +1,15 @@
+{
+  "name": "swyf-review",
+  "private": true,
+  "type": "module",
+  "description": "Reviews mods for the catalogue. It reads the code and never runs it.",
+  "scripts": {
+    "start": "bun run service/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.7.0"
+  }
+}
