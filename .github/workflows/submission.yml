@@ -9,7 +9,10 @@ name: Process a mod submission
 
 on:
   issues:
-    types: [opened, edited, reopened]
+    # Opened and reopened, but not edited: a re-run of the workflow would open a second
+    # pull request for the same submission, and a person fixing a typo should not cause
+    # that. A failed run is retried by reopening the issue or by dispatching it by hand.
+    types: [opened, reopened]
   workflow_dispatch:
     inputs:
       body:
@@ -32,11 +35,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Get the submission
-        id: submission
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
           MANUAL_BODY: ${{ inputs.body }}
         run: |
           $body = if ($env:MANUAL_BODY) { $env:MANUAL_BODY } else { $env:ISSUE_BODY }
@@ -44,16 +47,22 @@ jobs:
           if ($body -notmatch 'swyf-modding-submission') {
             throw 'This issue is not a submission: it does not carry the marker the site writes.'
           }
-          'body<<BODY_EOF' >> $env:GITHUB_OUTPUT
-          $body >> $env:GITHUB_OUTPUT
-          'BODY_EOF' >> $env:GITHUB_OUTPUT
+
+          # Written to a file rather than passed as an argument: the body has lines in
+          # it, and a command-line argument cannot carry a newline safely.
+          Set-Content -LiteralPath ./submission.md -Value $body -NoNewline
+
+          if ($env:MANUAL_BODY) {
+            'subject=Mod submission: manual' >> $env:GITHUB_OUTPUT
+          } else {
+            'subject=' + $env:ISSUE_TITLE >> $env:GITHUB_OUTPUT
+          }
 
       - name: Check the release and read the code
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BODY: ${{ steps.submission.outputs.body }}
-        run: ./tools/submission.ps1 -Body $env:BODY -OutDir ./out
+        run: ./tools/submission.ps1 -BodyFile ./submission.md -OutDir ./out
 
       # ------------------------------------------------------------------ the review
       #
@@ -84,24 +93,36 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          SUBJECT: ${{ steps.submission.outputs.subject }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          $branch = 'submission/' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+          # One branch per issue, so a re-run updates the same pull request rather
+          # than opening a second one.
+          $branch = if ($env:ISSUE_NUMBER) { "submission/issue-$($env:ISSUE_NUMBER)" } else { "submission/manual-$([Guid]::NewGuid().ToString('N').Substring(0,8))" }
+
           git config user.name 'swyf-modding-bot'
           git config user.email 'bot@swyf-modding.invalid'
-          git checkout -b $branch
+          git checkout -B $branch
           Copy-Item ./out/mods.json ./mods.json -Force
           git add mods.json
-          git commit -m 'Add a mod from a submission: ${{ github.event.issue.title }}'
+          git commit -m "Add a mod from a submission: $env:SUBJECT"
           git push -u origin $branch
+
+          $existing = gh pr list --head $branch --state all --json number --jq '.[0].number'
+          if ($existing) {
+            Write-Host "A pull request for this submission already exists (#$existing); updating it."
+            gh pr edit $existing --body (Get-Content -Raw ./out/submission-report.md)
+            exit 0
+          }
 
           $body = @"
           A mod submission, processed automatically.
 
-          The entry below was filled in and checked by the website, the release was
-          downloaded and read, and the file hashes and capabilities in it come from the
-          code itself.
+          The entry was filled in and checked by the website, the release was
+          downloaded and read, and the file hashes and capabilities in it come from
+          the code itself.
 
           $(Get-Content -Raw ./out/submission-report.md)
           "@
 
-          gh pr create --title '${{ github.event.issue.title }}' --body $body --base main --head $branch
+          gh pr create --title $env:SUBJECT --body $body --base main --head $branch

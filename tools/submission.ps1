@@ -22,8 +22,13 @@
 #>
 [CmdletBinding()]
 param(
-    # The submission issue's body.
-    [Parameter(Mandatory = $true)][string]$Body,
+    # The submission issue's body. Read from a file when the body is long or has
+    # lines in it, which it always does: a command-line argument cannot carry a
+    # newline safely.
+    [string]$Body,
+
+    # A file holding the submission issue's body, as an alternative to -Body.
+    [string]$BodyFile,
 
     # The catalogue to add the entry to. Named apart from the variable the parsed catalogue is
     # held in, because PowerShell does not distinguish $Catalogue from $catalogue and a
@@ -39,6 +44,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $api = 'https://api.github.com'
+
+if (-not $Body -and $BodyFile) { $Body = Get-Content -Raw -LiteralPath $BodyFile }
+if (-not $Body) { throw 'The submission has no body: pass -Body or -BodyFile.' }
 
 # ---------------------------------------------------------------- the entry
 
