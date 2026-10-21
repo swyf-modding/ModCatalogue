@@ -38,11 +38,9 @@ FROM tools AS service
 COPY package.json bun.lock ./
 RUN bun install --production
 
-# The agent, installed globally so it is on PATH the way the review command
-# expects. Pinned by version at build time so the image is the same every
-# time it runs, rather than whatever npm serves tomorrow.
-RUN bun install -g freebuff@latest
-RUN bun pm cache rm -rf
+# freebuff is installed as a dependency, so its binary is here and on PATH for
+# every user in the container, including the non-root review user.
+ENV PATH="/app/node_modules/.bin:${PATH}"
 
 # The service itself.
 COPY service/ /app/service/
@@ -61,7 +59,9 @@ ENV PORT=8080 \
 EXPOSE 8080
 
 # Bun's own runtime check, so the healthcheck needs no shell in the image.
+# It is string concatenation rather than a template literal because Docker
+# expands ${...} in a CMD, and the URL must reach Bun intact.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD bun -e 'fetch(`http://127.0.0.1:${process.env.PORT}/health`).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))'
+  CMD bun -e 'fetch("http://127.0.0.1:" + process.env.PORT + "/health").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))'
 
 CMD ["bun", "run", "/app/service/server.ts"]

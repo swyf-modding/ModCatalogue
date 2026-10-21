@@ -1,0 +1,64 @@
+name: Verify review
+
+# The review service is the thing that decides whether a submission is listed,
+# so it is the thing most worth checking before it ships. A review that cannot
+# read the code must come back as "unsure", and that is a rule with a test.
+
+on:
+  pull_request:
+    paths:
+      - 'review/**'
+      - '.github/workflows/verify-review.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'review/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        working-directory: review
+        run: bun install --frozen-lockfile
+
+      - name: Type-check
+        working-directory: review
+        run: bun run typecheck
+
+      - name: Test
+        working-directory: review
+        run: bun test
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The container is where the service actually runs, and a Dockerfile that
+      # does not build is a service that does not run. This is the check for it.
+      - name: Build the image
+        working-directory: review
+        run: docker build -t swyf-review .
+
+      - name: The healthcheck must answer
+        working-directory: review
+        run: |
+          docker run -d --name swyf-review -p 8080:8080 swyf-review
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/health > /dev/null; then
+              echo "health: ok"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "health: never answered"
+          docker logs swyf-review
+          exit 1
