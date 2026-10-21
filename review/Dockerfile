@@ -49,7 +49,7 @@ RUN chown -R review:review /app
 USER review
 
 ENV PORT=8080 \
-    REVIEW_COMMAND=/app/service/review-jev.ts \
+    REVIEW_COMMAND=/app/service/review-opencode.ts \
     REVIEW_MODEL=typesafe/jev \
     MAX_MODS_PER_REQUEST=32
 
