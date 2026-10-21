@@ -1,58 +1,17 @@
-// The OpenCode review runner.
+// The Jev review runner via OpenCode's Zen API.
 //
-// Reads prompt.md and facts.json from the work directory, sends them to an
-// OpenCode instance via /api/experimental/generate, and writes verdict.json
-// back to the work directory.
+// Reads prompt.md and facts.json from the work directory, sends them to Jev
+// via OpenCode's System One API (POST /zen/v1/systemone), and writes
+// verdict.json back to the work directory.
 //
-// OpenCode's HTTP API is experimental and session-based. The operator pairs
-// once (POST /api/pair, then GET /auth/connect/{code} with Accept: JSON) to
-// obtain a session token, which is passed as OPENCODE_API_TOKEN. The model is
-// chosen with REVIEW_MODEL.
+// Jev is a System One model: it takes unstructured state plus a set of typed
+// questions and returns structured, typed decisions — exactly what a review
+// needs. It works headless in a container with an API key.
 //
 // Plain TypeScript, run by Bun: no build step, no compile before it can start.
 
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-
-/** Find the last JSON object in text that contains a "verdict" field. */
-function extractVerdictFromText(text: string): { verdict: string; reason: string; read?: string[] } | null {
-  // Walk the text tracking brace depth so we capture whole JSON objects even
-  // when the model narrates around them.
-  const candidates: string[] = [];
-  let depth = 0;
-  let start = -1;
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === "{") {
-      if (depth === 0) start = i;
-      depth++;
-    } else if (text[i] === "}") {
-      depth--;
-      if (depth === 0 && start >= 0) {
-        candidates.push(text.slice(start, i + 1));
-        start = -1;
-      }
-    }
-  }
-
-  // Try from last to first: a narrating model may emit several JSON objects;
-  // the last one is most likely to be the considered answer.
-  for (let i = candidates.length - 1; i >= 0; i--) {
-    try {
-      const parsed = JSON.parse(candidates[i]) as { verdict?: unknown; reason?: unknown; read?: unknown };
-      if (typeof parsed.verdict !== "string") continue;
-
-      return {
-        verdict: parsed.verdict,
-        reason: typeof parsed.reason === "string" ? parsed.reason : "",
-        read: Array.isArray(parsed.read) ? parsed.read.filter((r) => typeof r === "string") : undefined,
-      };
-    } catch {
-      // Not valid JSON. Keep looking.
-    }
-  }
-
-  return null;
-}
 
 async function main(): Promise<void> {
   const workDir = process.argv[2];
@@ -64,26 +23,54 @@ async function main(): Promise<void> {
   const prompt = await readFile(join(workDir, "prompt.md"), "utf8");
   const facts = await readFile(join(workDir, "facts.json"), "utf8");
 
-  const baseUrl = (process.env.OPENCODE_BASE_URL ?? "http://localhost:3456").replace(/\/+$/, "");
-  const apiToken = process.env.OPENCODE_API_TOKEN;
-  if (!apiToken) {
-    console.error("OPENCODE_API_TOKEN is not set");
-    console.error("Pair once: POST /api/pair, then GET /auth/connect/<code> with Accept: application/json");
+  const baseUrl = (process.env.OPENCODE_BASE_URL ?? "https://opencode.ai").replace(
+    /\/+$/,
+    "",
+  );
+  const apiKey = process.env.OPENCODE_API_KEY;
+  if (!apiKey) {
+    console.error("OPENCODE_API_KEY is not set");
     process.exit(1);
   }
 
-  // The model OpenCode should use (e.g. anthropic/claude-3-5-sonnet).
-  const model = process.env.REVIEW_MODEL ?? "anthropic/claude-3-5-sonnet";
+  const model = process.env.REVIEW_MODEL ?? "jev-1.13-free";
+
+  // The state is the review task plus the facts read from the mod's release
+  // and source. Jev answers the questions below from this state.
+  const state =
+    prompt +
+    "\n\n---\n\n## Facts (read from the mod's release and source)\n" +
+    facts;
+
+  const questions = {
+    verdict: {
+      type: "enum",
+      instructions:
+        "ok if the catalogue entry is consistent and honestly described. " +
+        "unsure if anything does not add up or you cannot tell. " +
+        "refuse if something in it should stop a player installing it.",
+    },
+    reason: {
+      type: "string",
+      instructions: "One sentence explaining the verdict.",
+    },
+    read: {
+      type: "array",
+      instructions:
+        "List of files read to reach this verdict, from ./mod and ./source.",
+    },
+  };
 
   const body = JSON.stringify({
-    prompt,
     model,
+    state,
+    questions,
   });
 
-  const response = await fetch(`${baseUrl}/api/experimental/generate`, {
+  const response = await fetch(`${baseUrl}/zen/v1/systemone`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${apiToken}`,
+      Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body,
@@ -95,18 +82,19 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const data = await response.json() as { data?: { text?: string } };
-  const content = data.data?.text ?? "";
+  const data = await response.json();
 
-  if (!content) {
-    console.error("OpenCode returned an empty response");
-    process.exit(1);
-  }
+  // Jev returns structured output matching the questions schema: verdict,
+  // reason, read. It may be at the top level or nested under a result key.
+  const result =
+    data.verdict !== undefined
+      ? data
+      : data.result ?? data.decision ?? data.answers ?? data;
 
-  const verdict = extractVerdictFromText(content);
-  if (!verdict) {
-    console.error("OpenCode did not return a structured verdict");
-    console.error(content);
+  const verdictStr = result.verdict;
+  if (verdictStr !== "ok" && verdictStr !== "unsure" && verdictStr !== "refuse") {
+    console.error("Jev did not return a valid verdict:");
+    console.error(JSON.stringify(result, null, 2));
     process.exit(1);
   }
 
@@ -114,9 +102,11 @@ async function main(): Promise<void> {
     join(workDir, "verdict.json"),
     JSON.stringify(
       {
-        verdict: verdict.verdict === "ok" || verdict.verdict === "refuse" ? verdict.verdict : "unsure",
-        reason: typeof verdict.reason === "string" ? verdict.reason : "",
-        read: Array.isArray(verdict.read) ? verdict.read.filter((r) => typeof r === "string") : undefined,
+        verdict: verdictStr,
+        reason: typeof result.reason === "string" ? result.reason : "",
+        read: Array.isArray(result.read)
+          ? result.read.filter((r: unknown) => typeof r === "string")
+          : undefined,
       },
       null,
       2,

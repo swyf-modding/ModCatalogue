@@ -14,9 +14,9 @@
 #     firewall the operator sets, not a default.
 #
 # The agent itself is a separate, swappable command. REVIEW_COMMAND decides
-# what actually does the reviewing; the default is Jev via OpenRouter, which
-# works headless in a container with an API key. Swapping in something else
-# (including OpenCode) is one variable.
+# what actually does the reviewing; the default is Jev via OpenCode's Zen API,
+# which works headless in a container with an API key. Swapping in something
+# else is one variable.
 #
 # Bun runs the service: it runs TypeScript with no build step, so the image
 # can be built from the checkout as it is.
@@ -32,14 +32,6 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 FROM tools AS service
-COPY package.json bun.lock ./
-RUN bun install --production
-
-# OpenCode CLI, installed globally so `opencode` is on PATH. It is the
-# review agent: it reads the mod and answers with a verdict.
-RUN bun install -g @opencode/opencode || true
-
-# The service itself.
 COPY service/ /app/service/
 
 # The service runs as a user that is not root, so a bug in it is not
@@ -50,7 +42,7 @@ USER review
 
 ENV PORT=8080 \
     REVIEW_COMMAND=/app/service/review-opencode.ts \
-    REVIEW_MODEL=typesafe/jev \
+    REVIEW_MODEL=jev-1.13-free \
     MAX_MODS_PER_REQUEST=32
 
 EXPOSE 8080

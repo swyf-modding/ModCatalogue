@@ -87,36 +87,26 @@ working directory and has to leave a `verdict.json` in it:
 ```
 
 The default is `review-opencode.ts`, which sends the prompt and the facts to
-[OpenCode](https://opencode.ai) via its
-[HTTP API](https://opencode.ai/v2/docs/api) (`POST /api/experimental/generate`).
-OpenCode is free and works headless in a container with an API token.
+Jev via [OpenCode's Zen API](https://opencode.ai/v2/docs/api)
+(`POST /zen/v1/systemone`). Jev is a System One model: it takes unstructured
+state plus a set of typed questions and returns structured, typed decisions —
+exactly what a review needs. OpenCode is free and works headless in a
+container with an API key.
 
-To authenticate, pair once with your OpenCode instance:
-
-```sh
-# On the machine running OpenCode:
-curl -X POST http://localhost:3456/api/pair
-# -> { "code": "ABCD-EFGH" }
-
-# Redeem the pairing code for a JSON session token:
-curl "http://localhost:3456/auth/connect/ABCD-EFGH" -H "Accept: application/json"
-# -> the session token
-```
-
-Then pass the token to the container:
+Get an API key from OpenCode, then pass it to the container:
 
 ```sh
 docker run -d --name swyf-review -p 8080:8080 \
-  -e OPENCODE_BASE_URL=http://<host-running-opencode>:3456 \
-  -e OPENCODE_API_TOKEN=<session-token> \
+  -e OPENCODE_BASE_URL=https://opencode.ai \
+  -e OPENCODE_API_KEY=<your-opencode-api-key> \
   -e GITHUB_TOKEN=ghp_... \
   swyf-review
 ```
 
-Set the model with `REVIEW_MODEL` (default `typesafe/jev`):
+Set the model with `REVIEW_MODEL` (default `jev-1.13-free`):
 
 ```sh
--e REVIEW_MODEL=typesafe/jev
+-e REVIEW_MODEL=jev-1.13-free
 ```
 
 The container needs to reach OpenCode and GitHub, and that is the whole list —
