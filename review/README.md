@@ -33,7 +33,8 @@ docker run -d --name swyf-review \
   --security-opt no-new-privileges \
   --pids-limit 256 \
   --memory 2g \
-  -e REVIEW_MODEL= \
+  -e OPENROUTER_API_KEY=sk-or-... \
+  -e GITHUB_TOKEN=ghp_... \
   swyf-review
 ```
 
@@ -85,34 +86,30 @@ working directory and has to leave a `verdict.json` in it:
 { "verdict": "ok", "reason": "one sentence", "read": ["the files it read"] }
 ```
 
-The default is `review-freebuff.ts`, which drives the
-[Freebuff](https://freebuff.com/cli) CLI. The CLI is free and needs no key,
-and it ships a code-reviewer of its own.
+The default is `review-jev.ts`, which sends the prompt and the facts to
+[Jev](https://jev.typesafe.ai) via [OpenRouter](https://openrouter.ai).
+Jev is a System One model: it takes unstructured text plus a set of questions
+and returns structured, typed decisions — exactly what a review needs. It works
+headless in a container with an API key (`OPENROUTER_API_KEY`), unlike an
+interactive CLI that needs a person to log in.
 
-It is worth being clear about one thing: the CLI is an interactive terminal
-program with no documented headless mode. So it is given what it needs - a
-terminal, via `script`, and the prompt on its standard input - and what
-comes back is read. If that ever stops working, the fix is in
-`service/review-freebuff.ts` and nowhere else, because it is the only
-place that knows how the agent is invoked.
+Set the model with `REVIEW_MODEL` (default `typesafe/jev`):
+
+```sh
+-e REVIEW_MODEL=typesafe/jev
+```
+
+Jev needs to reach OpenRouter and nothing else; add an egress policy at the
+firewall or in front of the container so it can reach OpenRouter and GitHub,
+and that is the whole list.
+
+If that ever stops working, the fix is in `service/review-jev.ts` and nowhere
+else, because it is the only place that knows how the agent is invoked.
 
 Swapping in a different agent is one variable:
 
 ```sh
 -e REVIEW_COMMAND=/app/service/review-something-else.ts
-```
-
-## Running it
-
-Bun runs the service: it runs TypeScript with no build step, so the container is
-built from the checkout as it is. `bun run` starts it, `bun test` runs the
-checks, `bun run typecheck` type-checks it.
-
-```sh
-bun install
-bun run typecheck
-bun test
-bun run service/server.ts
 ```
 
 ## The GitHub token

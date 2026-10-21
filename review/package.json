@@ -8,12 +8,6 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },
-  // freebuff is the review agent: it drives a terminal UI through a pty, so it
-  // has to be on PATH as a binary. Installed as a dependency (not global) so
-  // every user in the container finds it in node_modules/.bin.
-  "dependencies": {
-    "freebuff": "*"
-  },
   "devDependencies": {
     "@types/bun": "^1.2.0",
     "typescript": "^5.7.0"

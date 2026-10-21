@@ -14,8 +14,9 @@
 #     firewall the operator sets, not a default.
 #
 # The agent itself is a separate, swappable command. REVIEW_COMMAND decides
-# what actually does the reviewing; the default is the Freebuff CLI, which
-# is free and needs no key. Swapping in something else is one variable.
+# what actually does the reviewing; the default is Jev via OpenRouter, which
+# works headless in a container with an API key. Swapping in something else
+# is one variable.
 #
 # Bun runs the service: it runs TypeScript with no build step, so the image
 # can be built from the checkout as it is.
@@ -23,24 +24,16 @@
 FROM oven/bun:1 AS base
 WORKDIR /app
 
-# util-linux for `script`, which is what gives a terminal UI a pty to talk
-# to. The Freebuff CLI is a terminal program, and a program that expects a
-# terminal and is handed a pipe will not always behave.
-#
 # git for the source, which is cloned rather than shipped with the image so
 # that a review is of the code as GitHub has it.
 FROM base AS tools
 RUN apt-get update \
- && apt-get install --no-install-recommends -y util-linux git ca-certificates \
+ && apt-get install --no-install-recommends -y git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
 FROM tools AS service
 COPY package.json bun.lock ./
 RUN bun install --production
-
-# freebuff is installed as a dependency, so its binary is here and on PATH for
-# every user in the container, including the non-root review user.
-ENV PATH="/app/node_modules/.bin:${PATH}"
 
 # The service itself.
 COPY service/ /app/service/
@@ -52,8 +45,8 @@ RUN chown -R review:review /app
 USER review
 
 ENV PORT=8080 \
-    REVIEW_COMMAND=/app/service/review-freebuff.ts \
-    REVIEW_MODEL= \
+    REVIEW_COMMAND=/app/service/review-jev.ts \
+    REVIEW_MODEL=typesafe/jev \
     MAX_MODS_PER_REQUEST=32
 
 EXPOSE 8080
