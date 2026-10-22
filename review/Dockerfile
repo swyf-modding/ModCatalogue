@@ -14,9 +14,10 @@
 #     firewall the operator sets, not a default.
 #
 # The agent itself is a separate, swappable command. REVIEW_COMMAND decides
-# what actually does the reviewing; the default is Jev via OpenCode's Zen API,
-# which works headless in a container with an API key. Swapping in something
-# else is one variable.
+# what actually does the reviewing; the default is a two-stage review:
+# Jev (OpenCode's System One API) does the triage, and a stronger model,
+# run through the real opencode CLI with every tool switched off, makes the
+# decision. Swapping in something else is one variable.
 #
 # Bun runs the service: it runs TypeScript with no build step, so the image
 # can be built from the checkout as it is.
@@ -31,6 +32,30 @@ RUN apt-get update \
  && apt-get install --no-install-recommends -y git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
+# The opencode CLI, for the reviewer. npm's `opencode-ai` package is only a
+# launcher whose postinstall links the real binary, and Bun does not run
+# postinstall scripts, so the platform package that holds the binary is
+# installed directly. It is installed here, as root, at build time: the
+# running container is meant to be read-only and the service user has no
+# business installing anything.
+#
+# The x64 build needs a CPU with AVX2. On an older CPU, use
+# opencode-linux-x64-baseline instead (the build's --version check below
+# fails loudly if the binary cannot run).
+ARG OPENCODE_VERSION=1.19.3
+RUN set -eu; \
+    case "$(uname -m)" in \
+      x86_64)  pkg=opencode-linux-x64 ;; \
+      aarch64) pkg=opencode-linux-arm64 ;; \
+      *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    mkdir -p /opt/opencode \
+ && cd /opt/opencode \
+ && echo '{}' > package.json \
+ && bun add "${pkg}@${OPENCODE_VERSION}" \
+ && ln -s "/opt/opencode/node_modules/${pkg}/bin/opencode" /usr/local/bin/opencode \
+ && opencode --version
+
 FROM tools AS service
 COPY service/ /app/service/
 
@@ -43,6 +68,7 @@ USER review
 ENV PORT=8080 \
     REVIEW_COMMAND=/app/service/review-opencode.ts \
     REVIEW_MODEL=jev-1.13-free \
+    SMART_MODE=cli \
     MAX_MODS_PER_REQUEST=32
 
 EXPOSE 8080
