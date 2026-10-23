@@ -54,7 +54,14 @@ jobs:
           }
           if (-not $mode) { exit 0 }
 
+          # Anyone may write the command; only someone with write access here is answered. A
+          # failure to find out who has access is not the same as "no": it is worth a red run,
+          # because otherwise it looks like the command was ignored.
           $permission = gh api "repos/$($env:GITHUB_REPOSITORY)/collaborators/$($env:WHO)/permission" --jq .permission
+          if ($LASTEXITCODE -ne 0 -or -not $permission) {
+            throw "Could not read what access $($env:WHO) has. The app needs Metadata: read for that."
+          }
+
           if ($permission -notin @('admin', 'maintain', 'write')) {
             Write-Host "$($env:WHO) has $permission here; ignoring the command."
             exit 0
