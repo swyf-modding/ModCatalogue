@@ -839,7 +839,8 @@ async function main(): Promise<void> {
   if (!decision) {
     verdict = "unsure";
     reason =
-      `The full review could not run (every reviewer model failed or timed out), so this is held for a person. [${triageNote}; ${coverage}]`;
+      `The full review could not run (every reviewer model failed or timed out), so this is held for a person; ` +
+      `the review service's log has the reason. [${triageNote}; ${coverage}]`;
   } else {
     verdict = decision.verdict;
     const notes: string[] = [];

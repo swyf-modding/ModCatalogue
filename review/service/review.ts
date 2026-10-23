@@ -472,13 +472,23 @@ export async function reviewMod(
     await chmod(workDir, 0o755);
 
     const command = process.env.REVIEW_COMMAND ?? "/app/service/review-opencode.ts";
-    await run(process.execPath, [command, workDir], {
+    const output = await run(process.execPath, [command, workDir], {
       cwd: workDir,
       timeout: 15 * 60_000,
       maxBuffer: 8 * 1024 * 1024,
       // The agent is told not to run anything, and this makes it a little harder.
       env: { ...process.env, REVIEW_MODEL: process.env.REVIEW_MODEL ?? "", REVIEW_READ_ONLY_DIR: modDir },
     });
+
+    // Keep what the agent printed. When every model fails, its output is the only place the
+    // reason exists - and it is what somebody needs after "the review could not run".
+    if (output.trim()) {
+      try {
+        writeFileSync(join(workDir, "agent-output.txt"), output, "utf8");
+      } catch {
+        // A transcript is a nicety; losing it must not lose the review.
+      }
+    }
 
     // The agent is asked for JSON only, but if it narrated, the last JSON object
     // in what it printed is the verdict. The transcript is supplementary: a
@@ -492,6 +502,9 @@ export async function reviewMod(
     // no release and no source - then the answer is "unsure" whatever the agent
     // said, because it said it about a summary and a list of hashes.
     if (!verdict) {
+      const tail = output.trim().slice(-2000);
+      console.error(`review agent produced no verdict${tail ? `:\n${tail}` : " and said nothing"}`);
+
       return {
         verdict: "unsure",
         reason: "the review did not produce a verdict, so the submission is held back for a person",
@@ -514,6 +527,10 @@ export async function reviewMod(
       read: verdict.read,
     };
   } catch (error) {
+    // A driver that exits non-zero says why on its stderr, and that is the only copy.
+    const stderr = (error as { stderr?: string }).stderr;
+    if (stderr && stderr.trim()) console.error(`review agent failed:\n${stderr.trim().slice(-2000)}`);
+
     return {
       verdict: "unsure",
       reason: `the review could not be run: ${(error as Error).message}`,

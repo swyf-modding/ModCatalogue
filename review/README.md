@@ -122,6 +122,44 @@ Swapping in a different agent is one variable:
 -e REVIEW_COMMAND=/app/service/review-something-else.ts
 ```
 
+## Seeing why a review failed
+
+A verdict of `unsure` that says *"the full review could not run (every reviewer model failed or
+timed out)"* means stage 1 answered and stage 2 did not - the triage line in the same reason
+shows what Jev made of it, so the network and the API key are fine and the reviewer is what
+failed.
+
+The service prints the reviewer's own output when that happens, one line per model, so:
+
+```sh
+docker logs -f swyf-review
+```
+
+and then ask it about one mod directly, without a submission:
+
+```sh
+sh tools/try-review.sh swyf-modding AI-Backend v1.2.1 http://127.0.0.1:8080
+```
+
+A test that fails there is the service's problem, not the workflow's.
+
+### When the CLI is the problem
+
+The default is `SMART_MODE=cli`: it runs the real `opencode` binary with a private empty `HOME`,
+because that is how the free models are meant to be used. That also means it has no stored
+credentials, and free model ids change. If the log shows the CLI failing for every model, the
+HTTP path uses the same API key Jev just used, which is a good test of whether the key is fine:
+
+```sh
+docker run -d --name swyf-review -p 8080:8080 \
+  -e SMART_MODE=http \
+  -e OPENCODE_API_KEY=<the same key> \
+  swyf-review
+```
+
+`SMART_MODELS` chooses the models in both modes; in `http` mode they are the provider's own
+names, without the `opencode/` prefix.
+
 ## The GitHub token
 
 A review makes two calls to GitHub - the release and the catalogue - and the
