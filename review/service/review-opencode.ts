@@ -555,6 +555,20 @@ interface Decision {
   model: string;
 }
 
+/**
+ * Why each reviewer model was given up on, one short line each.
+ *
+ * Kept so the verdict can say something more useful than "every model failed": the reason is
+ * what a maintainer sees in the issue, and the log is not always at hand.
+ */
+const MODEL_FAILURES: string[] = [];
+
+function failed(model: string, why: string): void {
+  const line = `${model}: ${why}`.replace(/\s+/g, " ").trim();
+  MODEL_FAILURES.push(line);
+  console.error(`reviewer ${line}`);
+}
+
 /** Same flat-object extraction the service uses, so both agree on what an answer is. */
 function extractVerdict(output: string): { verdict: Verdict; reason: string } | null {
   const candidates = [...output.matchAll(/\{[^{}]*"verdict"[^{}]*\}/gs)].map((m) => m[0]);
@@ -590,7 +604,7 @@ function runCli(model: string, message: string): Promise<string | null> {
       home = await mkdtemp(join(tmpdir(), "oc-home-"));
       cwd = await mkdtemp(join(tmpdir(), "oc-cwd-"));
     } catch (error) {
-      console.error(`reviewer ${model}: could not create sandbox: ${String(error)}`);
+      failed(model, `could not create the sandbox: ${String(error)}`);
       resolve(null);
       return;
     }
@@ -619,7 +633,7 @@ function runCli(model: string, message: string): Promise<string | null> {
         },
       });
     } catch (error) {
-      console.error(`reviewer ${model}: could not start opencode: ${String(error)}`);
+      failed(model, `could not start ${OPENCODE_BIN}: ${String(error)}`);
       await cleanup();
       resolve(null);
       return;
@@ -636,13 +650,13 @@ function runCli(model: string, message: string): Promise<string | null> {
     });
 
     const timer = setTimeout(() => {
-      console.error(`reviewer ${model}: timed out after ${SMART_TIMEOUT_MS} ms`);
+      failed(model, `timed out after ${SMART_TIMEOUT_MS} ms`);
       child.kill("SIGKILL");
     }, SMART_TIMEOUT_MS);
 
     child.on("error", async (error) => {
       clearTimeout(timer);
-      console.error(`reviewer ${model}: ${String(error)}`);
+      failed(model, String(error));
       await cleanup();
       resolve(null);
     });
@@ -650,7 +664,7 @@ function runCli(model: string, message: string): Promise<string | null> {
     child.on("close", async (code) => {
       clearTimeout(timer);
       if (code !== 0) {
-        console.error(`reviewer ${model}: opencode exited ${code}: ${stderr.slice(0, 500)}`);
+        failed(model, `opencode exited ${code}: ${stderr.slice(0, 300)}`);
       }
       await cleanup();
       resolve(code === 0 ? stdout : null);
@@ -661,17 +675,24 @@ function runCli(model: string, message: string): Promise<string | null> {
 async function decideViaCli(system: string, user: string): Promise<Decision | null> {
   const message = `${system}\n\n${user}`;
   if (message.length > 120_000) {
-    console.error(`reviewer prompt is ${message.length} chars, too large for one CLI argument; lower SMART_STATE_CHARS`);
+    failed("every model", `the prompt is ${message.length} chars, too large for one argument; lower SMART_STATE_CHARS`);
     return null;
   }
 
   for (const model of SMART_MODELS) {
+    // A CLI model is named provider/model. A bare name is a configuration mistake, and saying so
+    // is more use than "model not found" from a binary that was given the wrong argument.
+    if (!model.includes("/")) {
+      failed(model, "not a provider/model name, which is what the CLI needs (e.g. opencode/name-free)");
+      continue;
+    }
+
     const output = await runCli(model, message);
     if (!output) continue;
 
     const parsed = extractVerdict(output);
     if (!parsed) {
-      console.error(`reviewer ${model} returned no usable verdict: ${output.slice(0, 300)}`);
+      failed(model, `no usable verdict in: ${output.slice(0, 200)}`);
       continue;
     }
     return { verdict: parsed.verdict, reason: parsed.reason, model };
@@ -711,19 +732,19 @@ async function decide(
       });
       if (!res.ok) {
         const body = await res.text().catch(() => "");
-        console.error(`reviewer ${model} failed: ${res.status} ${body.slice(0, 300)}`);
+        failed(model, `${res.status} ${body.slice(0, 200)}`);
         continue;
       }
       const json: any = await res.json();
       const content = json?.choices?.[0]?.message?.content;
       const parsed = typeof content === "string" ? extractVerdict(content) : null;
       if (!parsed) {
-        console.error(`reviewer ${model} returned no usable verdict`);
+        failed(model, "no usable verdict in the reply");
         continue;
       }
       return { verdict: parsed.verdict, reason: parsed.reason, model };
     } catch (error) {
-      console.error(`reviewer ${model} error: ${String(error)}`);
+      failed(model, String(error));
     }
   }
   return null;
@@ -838,9 +859,10 @@ async function main(): Promise<void> {
 
   if (!decision) {
     verdict = "unsure";
+    const last = MODEL_FAILURES.length > 0 ? ` Last error: ${MODEL_FAILURES[MODEL_FAILURES.length - 1]}.` : "";
     reason =
-      `The full review could not run (every reviewer model failed or timed out), so this is held for a person; ` +
-      `the review service's log has the reason. [${triageNote}; ${coverage}]`;
+      `The full review could not run (every reviewer model failed or timed out), so this is held for a person.${last} ` +
+      `[${triageNote}; ${coverage}]`;
   } else {
     verdict = decision.verdict;
     const notes: string[] = [];

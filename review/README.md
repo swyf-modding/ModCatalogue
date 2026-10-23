@@ -127,9 +127,10 @@ Swapping in a different agent is one variable:
 A verdict of `unsure` that says *"the full review could not run (every reviewer model failed or
 timed out)"* means stage 1 answered and stage 2 did not - the triage line in the same reason
 shows what Jev made of it, so the network and the API key are fine and the reviewer is what
-failed.
+failed. The reason now carries the last model's error as well, so the issue usually says enough
+on its own.
 
-The service prints the reviewer's own output when that happens, one line per model, so:
+For the rest, the service prints the reviewer's output - one line per model - so:
 
 ```sh
 docker logs -f swyf-review
