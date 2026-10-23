@@ -36,9 +36,13 @@
 //                         default models are opencode/deepseek-v4.1-flash-free and
 //                         opencode/glm-5.3-flash-free, and SMART_STATE_CHARS defaults to 90000.
 //   OPENCODE_BIN          path to the opencode binary, default "opencode"
-//   SMART_URL             chat completions URL, default OpenCode's inference endpoint
+//   SMART_URL             chat completions URL, default OpenCode Go's endpoint
+//                         (https://opencode.ai/inference/go/openai/v1/chat/completions)
 //   SMART_API_KEY         key for SMART_URL, defaults to OPENCODE_API_KEY
 //   SMART_STATE_CHARS     characters the reviewer may be sent, default 240000
+//   SMART_TIMEOUT_MS      how long one model may take, default 300000 (http) or 150000 (cli).
+//                         A whole source tree is tens of thousands of tokens, and a model that
+//                         has to read it before answering is not slow so much as big.
 //   REVIEW_STATE_CHARS    characters sent to Jev for triage, default 120000
 //   TRIAGE_FILES          max files Jev scores for relevance on overflow, default 40
 //
@@ -80,7 +84,9 @@ const SMART_MODELS = (
   .split(",")
   .map((m) => m.trim())
   .filter(Boolean);
-const SMART_TIMEOUT_MS = SMART_MODE === "cli" ? 150_000 : 90_000;
+const SMART_TIMEOUT_MS = Number(
+  process.env.SMART_TIMEOUT_MS ?? (SMART_MODE === "cli" ? 150_000 : 300_000),
+);
 
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode";
 
@@ -348,6 +354,19 @@ function jevUrl(baseUrl: string): string {
   return process.env.JEV_URL ?? `${baseUrl}/zen/v1/systemone`;
 }
 
+/**
+ * Whether trying the same request again is worth it.
+ *
+ * Everything except a timeout. A timeout already spent the whole budget, so a second attempt
+ * spends it twice; anything else reaching this point is a connection that went away - a reset, a
+ * refused handshake, a TLS failure on a busy edge - and the next attempt usually lands. A 4xx or
+ * 5xx never gets here, because those are reported before the throw.
+ */
+function isTransient(error: unknown): boolean {
+  const text = String(error).toLowerCase();
+  return !text.includes("timeout") && !text.includes("abort");
+}
+
 async function systemOne(
   baseUrl: string,
   apiKey: string,
@@ -356,20 +375,35 @@ async function systemOne(
   questions: Record<string, unknown>,
   timeoutMs: number,
 ): Promise<any> {
-  const response = await fetch(jevUrl(baseUrl), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ model, state, questions }),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`OpenCode API error ${response.status}: ${text}`);
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch(jevUrl(baseUrl), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ model, state, questions }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`OpenCode API error ${response.status}: ${text}`);
+      }
+      return await response.json();
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0 && isTransient(error)) {
+        console.error(`triage: ${String(error)}; trying again once`);
+        continue;
+      }
+      throw error;
+    }
   }
-  return response.json();
+
+  throw lastError;
 }
 
 // `answers` is an object keyed by question id (an array form is handled too).
@@ -555,6 +589,22 @@ export interface Decision {
   model: string;
 }
 
+/**
+ * Why each reviewer model was given up on, one short line each.
+ *
+ * Kept so the verdict can say something more useful than "every model failed": the reason is
+ * what a maintainer sees in the issue, and the log is not always at hand.
+ */
+const MODEL_FAILURES: string[] = [];
+
+function failed(model: string, why: string): void {
+  // The log names the model; the verdict does not. What a maintainer reads in the issue is about
+  // the submission, and which model was tried is a detail for whoever runs the service.
+  const line = why.replace(/\s+/g, " ").trim();
+  MODEL_FAILURES.push(line);
+  console.error(`reviewer ${model}: ${line}`);
+}
+
 /** Same flat-object extraction the service uses, so both agree on what an answer is. */
 function extractVerdict(output: string): { verdict: Verdict; reason: string } | null {
   const candidates = [...output.matchAll(/\{[^{}]*"verdict"[^{}]*\}/gs)].map((m) => m[0]);
@@ -590,7 +640,7 @@ function runCli(model: string, message: string): Promise<string | null> {
       home = await mkdtemp(join(tmpdir(), "oc-home-"));
       cwd = await mkdtemp(join(tmpdir(), "oc-cwd-"));
     } catch (error) {
-      console.error(`reviewer ${model}: could not create sandbox: ${String(error)}`);
+      failed(model, `could not create the sandbox: ${String(error)}`);
       resolve(null);
       return;
     }
@@ -619,7 +669,7 @@ function runCli(model: string, message: string): Promise<string | null> {
         },
       });
     } catch (error) {
-      console.error(`reviewer ${model}: could not start opencode: ${String(error)}`);
+      failed(model, `could not start ${OPENCODE_BIN}: ${String(error)}`);
       await cleanup();
       resolve(null);
       return;
@@ -636,13 +686,13 @@ function runCli(model: string, message: string): Promise<string | null> {
     });
 
     const timer = setTimeout(() => {
-      console.error(`reviewer ${model}: timed out after ${SMART_TIMEOUT_MS} ms`);
+      failed(model, `timed out after ${SMART_TIMEOUT_MS} ms`);
       child.kill("SIGKILL");
     }, SMART_TIMEOUT_MS);
 
     child.on("error", async (error) => {
       clearTimeout(timer);
-      console.error(`reviewer ${model}: ${String(error)}`);
+      failed(model, String(error));
       await cleanup();
       resolve(null);
     });
@@ -650,7 +700,12 @@ function runCli(model: string, message: string): Promise<string | null> {
     child.on("close", async (code) => {
       clearTimeout(timer);
       if (code !== 0) {
-        console.error(`reviewer ${model}: opencode exited ${code}: ${stderr.slice(0, 500)}`);
+        // A process killed by the kernel says nothing, and the usual reason on a rented machine
+        // is a CPU the binary was not built for. Naming that beats an empty stderr.
+        const said = stderr.trim();
+        failed(model, said
+          ? `opencode exited ${code}: ${said.slice(0, 300)}`
+          : `opencode exited ${code} and said nothing, which is what a binary for the wrong CPU does`);
       }
       await cleanup();
       resolve(code === 0 ? stdout : null);
@@ -661,22 +716,105 @@ function runCli(model: string, message: string): Promise<string | null> {
 async function decideViaCli(system: string, user: string): Promise<Decision | null> {
   const message = `${system}\n\n${user}`;
   if (message.length > 120_000) {
-    console.error(`reviewer prompt is ${message.length} chars, too large for one CLI argument; lower SMART_STATE_CHARS`);
+    failed("every model", `the prompt is ${message.length} chars, too large for one argument; lower SMART_STATE_CHARS`);
     return null;
   }
 
   for (const model of SMART_MODELS) {
+    // A CLI model is named provider/model. A bare name is a configuration mistake, and saying so
+    // is more use than "model not found" from a binary that was given the wrong argument.
+    if (!model.includes("/")) {
+      failed(model, "not a provider/model name, which is what the CLI needs (e.g. opencode/name-free)");
+      continue;
+    }
+
     const output = await runCli(model, message);
     if (!output) continue;
 
     const parsed = extractVerdict(output);
     if (!parsed) {
-      console.error(`reviewer ${model} returned no usable verdict: ${output.slice(0, 300)}`);
+      failed(model, `no usable verdict in: ${output.slice(0, 200)}`);
       continue;
     }
     return { verdict: parsed.verdict, reason: parsed.reason, model };
   }
   return null;
+}
+
+/**
+ * Where the deciding model is asked.
+ *
+ * Go's models are on their own path; the other one serves the free tier, which only answers a
+ * logged-in OpenCode app and so cannot work from a container. `SMART_URL` overrides both.
+ */
+/**
+ * A streamed reply, read as it arrives.
+ *
+ * The answer and the model's reasoning are kept apart. A reasoning model streams its thinking
+ * first, in its own field, and merging the two puts the thinking where the verdict should be -
+ * which reads, in the issue, as a review that rambled instead of answering.
+ *
+ * A review sends a whole source tree, and the answer can take minutes. Asked without streaming,
+ * the connection carries nothing for that whole time, and a proxy that is tired of waiting closes
+ * it - which is the reset that looks like the model failing. Streamed, the first token arrives in
+ * seconds and the bytes keep coming, so there is no idle connection to give up on.
+ */
+export async function readStream(response: Response): Promise<{
+  content: string;
+  reasoning: string;
+  finish: string;
+  preview: string;
+}> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("the reply had no body");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let raw = "";
+  let content = "";
+  let reasoning = "";
+  let finish = "";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const text = decoder.decode(value, { stream: true });
+    if (raw.length < 2000) raw += text;
+    buffer += text;
+
+    let newline: number;
+    while ((newline = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+
+      try {
+        const choice = JSON.parse(data)?.choices?.[0];
+        const answer = choice?.delta?.content ?? choice?.message?.content;
+        const thought = choice?.delta?.reasoning_content ?? choice?.delta?.reasoning;
+
+        if (typeof answer === "string") content += answer;
+        if (typeof thought === "string") reasoning += thought;
+        if (typeof choice?.finish_reason === "string" && choice.finish_reason) {
+          finish = choice.finish_reason;
+        }
+      } catch {
+        // A keep-alive, or a line split across reads; the buffer handles the second case.
+      }
+    }
+
+    if (content.length > 200_000) break;
+  }
+
+  return { content, reasoning, finish, preview: raw };
+}
+
+function reviewerUrl(baseUrl: string): string {
+  return process.env.SMART_URL ?? `${baseUrl}/inference/go/openai/v1/chat/completions`;
 }
 
 async function decide(
@@ -687,44 +825,94 @@ async function decide(
 ): Promise<Decision | null> {
   if (SMART_MODE === "cli") return decideViaCli(system, user);
 
-  const url = process.env.SMART_URL ?? `${baseUrl}/inference/openai/v1/chat/completions`;
+  const url = reviewerUrl(baseUrl);
 
   for (const model of SMART_MODELS) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.SMART_API_KEY ?? apiKey}`,
-          ...(url.includes("opencode.ai") ? { "x-opencode-session": SESSION_ID } : {}),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: 800,
-          temperature: 0.1,
-          messages: [
-            { role: "system", content: system },
-            { role: "user", content: user },
-          ],
-        }),
-        signal: AbortSignal.timeout(SMART_TIMEOUT_MS),
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        console.error(`reviewer ${model} failed: ${res.status} ${body.slice(0, 300)}`);
-        continue;
+    let decided: Decision | null = null;
+
+    for (let attempt = 0; attempt < 2 && !decided; attempt++) {
+      const started = Date.now();
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.SMART_API_KEY ?? apiKey}`,
+            // OpenCode asks a client to name itself rather than arrive as a bare HTTP library, and
+            // to hold one session per conversation for routing and prompt caching.
+            "User-Agent": "swyf-modding-review/1.0",
+            ...(url.includes("opencode.ai") ? { "x-opencode-session": SESSION_ID } : {}),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            // A review answer is two sentences, but a model that reasons first spends tokens
+            // before it writes them, and a cap that fits the answer leaves it empty.
+            max_tokens: Number(process.env.SMART_MAX_TOKENS ?? 4000),
+            temperature: 0.1,
+            // Streamed, so a long review is not a silent connection. A provider that ignores this
+            // answers with JSON, which the content type says.
+            stream: true,
+            messages: [
+              { role: "system", content: system },
+              { role: "user", content: user },
+            ],
+          }),
+          signal: AbortSignal.timeout(SMART_TIMEOUT_MS),
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          failed(model, `${res.status} ${body.slice(0, 200)}`);
+          break;
+        }
+
+        const type = res.headers.get("content-type") ?? "";
+        let content: string;
+        let finish = "";
+        let reasoning = "";
+        let preview = "";
+
+        if (type.includes("text/event-stream")) {
+          ({ content, finish, reasoning, preview } = await readStream(res));
+        } else {
+          const raw = await res.text();
+          preview = raw;
+          try {
+            const choice = JSON.parse(raw)?.choices?.[0];
+            content = choice?.message?.content ?? "";
+            finish = choice?.finish_reason ?? "";
+          } catch {
+            content = "";
+          }
+        }
+
+        const parsed = typeof content === "string" ? extractVerdict(content) : null;
+        if (!parsed) {
+          // "length" is the one worth naming: a reasoning model that spent the budget thinking
+          // answers with nothing, and the fix is a bigger cap rather than another model.
+          const ran = finish === "length" ? " - the model ran out of tokens before answering, so raise SMART_MAX_TOKENS" : "";
+          const sample = (content.trim() || preview || "(nothing)").replace(/\s+/g, " ").slice(0, 400);
+          failed(
+            model,
+            `no usable verdict (finish=${finish || "?"}, answer ${content.length} chars, ` +
+              `reasoning ${reasoning.length} chars)${ran}: ${sample}`,
+          );
+          break;
+        }
+        decided = { verdict: parsed.verdict, reason: parsed.reason, model };
+      } catch (error) {
+        // Seconds, because "timed out" and "timed out after eleven of them" are different problems.
+        const seconds = Math.round((Date.now() - started) / 1000);
+
+        if (attempt === 0 && isTransient(error)) {
+          console.error(`reviewer ${model}: ${String(error)} after ${seconds}s; trying again once`);
+          continue;
+        }
+
+        failed(model, `${String(error)} after ${seconds}s`);
       }
-      const json: any = await res.json();
-      const content = json?.choices?.[0]?.message?.content;
-      const parsed = typeof content === "string" ? extractVerdict(content) : null;
-      if (!parsed) {
-        console.error(`reviewer ${model} returned no usable verdict`);
-        continue;
-      }
-      return { verdict: parsed.verdict, reason: parsed.reason, model };
-    } catch (error) {
-      console.error(`reviewer ${model} error: ${String(error)}`);
     }
+
+    if (decided) return decided;
   }
   return null;
 }
@@ -816,6 +1004,12 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const jevModel = process.env.REVIEW_MODEL || "jev-1.13-free";
+
+  // The two endpoints, once per review. A base URL with a path in it turns into a nonsense URL,
+  // and this is the line that makes that obvious instead of looking like a TLS problem.
+  if (SMART_MODE !== "cli") {
+    console.error(`reviewer endpoint: ${reviewerUrl(baseUrl)} (triage: ${baseUrl}/zen/v1/systemone)`);
+  }
 
   const { files, skipped } = await collectSource(join(workDir, "source"));
 
@@ -953,6 +1147,7 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
+// Run only as a program. Imported by the tests, this file must not start a review.
 if (import.meta.main) {
   main().catch((error) => {
     console.error(error);

@@ -3,19 +3,16 @@
     Reports what a mod assembly is able to do, by reading its IL.
 
 .DESCRIPTION
-    Scanning for suspicious strings does not work. A mod can assemble a command at runtime
-    from a StringBuilder and base64 it, and the literal never appears in the file - that is
-    exactly what SWYF-ModManager does legitimately, and a scan of its strings returns only
-    "powershell.exe" and "*.dll".
+    Scanning for strings does not work: a command can be built at runtime and base64'd, and the
+    literal never appears in the file. Method references cannot be hidden that way - the callee
+    is a metadata token, not text - so this reports which host-reaching APIs an assembly
+    references, rather than guessing at intent.
 
-    Method references, on the other hand, live in the assembly's metadata. Obfuscating a
-    string cannot hide a call to Process.Start, because the callee is a metadata token, not
-    text. So this reports capabilities - which host-reaching APIs an assembly references -
-    rather than guessing at intent.
+    It also reports where each assembly sits in the download, because Switchboard installs only
+    what is at the top of the unpacked zip.
 
-    This is NOT a malware scanner and it does not decide whether a mod is safe. Plenty of
-    mods legitimately need these capabilities. Its job is to make a capability CHANGE
-    between two releases impossible to miss, so a human reads the diff when it matters.
+    This is not a malware scanner and does not decide whether a mod is safe. Its job is to make
+    a capability change between two releases impossible to miss.
 
 .EXAMPLE
     ./scan-capabilities.ps1 -Path ./SwyfModManager.dll
@@ -34,6 +31,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'catalogue-rules.ps1')
 
 # ---------------------------------------------------------------- Mono.Cecil
 
@@ -98,9 +96,7 @@ Add-Type -Path (Get-Cecil $Cecil)
 
 # ---------------------------------------------------------------- taxonomy
 #
-# Each rule is: capability name -> list of substrings matched against
-# "<DeclaringType.FullName>::<MethodName>". Deliberately small and high signal:
-# a rule nobody can explain is a rule reviewers learn to ignore.
+# Each rule is: capability -> substrings matched against "<DeclaringType.FullName>::<MethodName>".
 
 $Rules = [ordered]@{
     'process' = @(
@@ -112,9 +108,8 @@ $Rules = [ordered]@{
         'System.Net.WebRequest::', 'System.Net.FtpWebRequest::', 'System.Net.WebSockets.',
         'UnityEngine.WWW::'
     )
-    # File::OpenWrite and File::Open(path, FileMode.Create) also match the read rule below. Counting
-    # an ambiguous call as both is the conservative answer: over-reporting a capability costs a
-    # reviewer a glance, under-reporting one hides a change.
+    # File::Open is also a read, and counting an ambiguous call as both is the conservative
+    # answer: over-reporting costs a glance, under-reporting hides a change.
     'filesystem-write' = @(
         'System.IO.File::Write', 'System.IO.File::Create', 'System.IO.File::Move',
         'System.IO.File::Delete', 'System.IO.File::Copy', 'System.IO.File::Append',
@@ -161,6 +156,14 @@ $Rules = [ordered]@{
     )
 }
 
+# The capability names are the catalogue's business: it may not name one that does not exist.
+# A name here that the catalogue does not know would be a capability the gate could not check.
+foreach ($capability in $Rules.Keys) {
+    if ($CatalogueCapabilities -notcontains $capability) {
+        throw "The scanner reports a capability the catalogue does not know: $capability"
+    }
+}
+
 # ---------------------------------------------------------------- scanning
 
 function Get-Sha256($file) {
@@ -168,7 +171,7 @@ function Get-Sha256($file) {
 }
 
 function Scan-Assembly {
-    param([string]$File)
+    param([string]$File, [string]$RelativePath)
 
     try { $asm = [Mono.Cecil.AssemblyDefinition]::ReadAssembly($File) }
     catch { return $null }   # not a managed assembly
@@ -214,13 +217,22 @@ function Scan-Assembly {
             }
         }
 
-        if ($pinvokes.Count -gt 0) { $caps['native-interop'] = $caps['native-interop'] }
+        # A P/Invoke is native interop whether or not the code also reaches Marshal directly, so
+        # the capability is there either way.
+        if ($pinvokes.Count -gt 0 -and -not $caps.Contains('native-interop')) {
+            $caps['native-interop'] = [ordered]@{}
+        }
 
         $names = @($caps.Keys)
-        if ($pinvokes.Count -gt 0 -and $names -notcontains 'native-interop') { $names += 'native-interop' }
+
+        # Where the file sits in the download. Switchboard installs what is at the top of the
+        # unpacked zip, so an assembly in a folder cannot be installed and cannot be named.
+        $atRoot = ($RelativePath -notmatch '[\\/]')
 
         return [pscustomobject]@{
             file         = [IO.Path]::GetFileName($File)
+            path         = $RelativePath
+            atRoot       = $atRoot
             assembly     = $asm.Name.Name
             version      = $asm.Name.Version.ToString()
             sha256       = Get-Sha256 $File
@@ -238,14 +250,17 @@ function Scan-Assembly {
 $targets = New-Object System.Collections.ArrayList
 $temp = $null
 $resolved = (Resolve-Path $Path).Path
+$root = $null
 
 if ((Get-Item $resolved).PSIsContainer) {
+    $root = $resolved
     Get-ChildItem $resolved -Filter *.dll -Recurse | ForEach-Object { [void]$targets.Add($_.FullName) }
 } elseif ($resolved -like '*.zip') {
     $temp = Join-Path ([IO.Path]::GetTempPath()) ('swyf-scan-' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Force -Path $temp | Out-Null
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [IO.Compression.ZipFile]::ExtractToDirectory($resolved, $temp)
+    $root = $temp
     Get-ChildItem $temp -Filter *.dll -Recurse | ForEach-Object { [void]$targets.Add($_.FullName) }
 } else {
     [void]$targets.Add($resolved)
@@ -253,11 +268,20 @@ if ((Get-Item $resolved).PSIsContainer) {
 
 $results = New-Object System.Collections.ArrayList
 foreach ($t in $targets) {
-    $r = Scan-Assembly $t
+    # The path is relative to the download's root, so a file in a folder is visible as one.
+    $relative = [IO.Path]::GetFileName($t)
+    if ($root) {
+        $relative = $t.Substring($root.Length).TrimStart([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+        $relative = $relative -replace '\\', '/'
+    }
+    $r = Scan-Assembly -File $t -RelativePath $relative
     if ($r) { [void]$results.Add($r) }
 }
 
 if ($temp -and (Test-Path $temp)) { Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue }
+
+# The same order every time, so two scans of the same release produce the same file.
+$results = @($results | Sort-Object -Property path)
 
 # ---------------------------------------------------------------- output
 
@@ -269,6 +293,7 @@ if ($Json) {
 foreach ($r in $results) {
     Write-Host ""
     Write-Host "$($r.file)" -ForegroundColor Cyan
+    if (-not $r.atRoot) { Write-Host "  in a folder: $($r.path) - switchboard installs only what is at the top of the download" -ForegroundColor Yellow }
     Write-Host "  assembly  : $($r.assembly) $($r.version)"
     Write-Host "  sha256    : $($r.sha256)"
     foreach ($p in $r.bepInPlugin) { Write-Host "  plugin    : $p" }

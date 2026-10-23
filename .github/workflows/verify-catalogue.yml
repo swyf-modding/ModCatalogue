@@ -28,6 +28,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The rules are the part that can be wrong without anybody noticing for weeks, so
+      # they have a test of their own. It needs no network and no releases.
+      - name: Test the rules
+        shell: pwsh
+        run: ./tools/test-catalogue.ps1
+
+      # The shape of the file first, and it costs nothing: no network, no release, no code.
+      # A catalogue that does not follow the rules is one Switchboard refuses whole, so this
+      # is the check that says so before the slow one starts.
+      - name: Check the catalogue follows the rules
+        shell: pwsh
+        run: ./tools/check-catalogue.ps1
+
       - name: Verify pinned hashes and capabilities
         shell: pwsh
         env:

@@ -1,0 +1,89 @@
+name: Maintainer commands
+
+# The review is a reviewer's tool: a maintainer reads what the bot found and decides. Three
+# commands, and only from someone with write access.
+#
+#   /recheck         run the checks and the review again, and edit the comment with what changed
+#   /create-pr       open the pull request anyway, when the review was unsure
+#   /create-pr force open it even though the review refused
+#
+# A command from anyone else is ignored rather than answered, so a stranger cannot make the bot
+# talk. Nothing here writes to the catalogue unless the checks pass.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  command:
+    # Comments on pull requests are not submissions.
+    if: github.event.issue.pull_request == null
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.command.outputs.run }}
+      mode: ${{ steps.command.outputs.mode }}
+    steps:
+      - name: Sign in as the bot
+        id: bot
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Who asked, and what
+        id: command
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          BODY: ${{ github.event.comment.body }}
+          WHO: ${{ github.event.comment.user.login }}
+          COMMENT: ${{ github.event.comment.id }}
+        run: |
+          'run=false' >> $env:GITHUB_OUTPUT
+
+          $mode = switch -Regex ($env:BODY.Trim()) {
+            '^/recheck(\s|$)' { 'recheck'; break }
+            '^/create-pr\s+force(\s|$)' { 'force'; break }
+            '^/create-pr(\s|$)' { 'create-pr'; break }
+            default { '' }
+          }
+          if (-not $mode) { exit 0 }
+
+          # Anyone may write the command; only someone with write access here is answered. A
+          # failure to find out who has access is not the same as "no": it is worth a red run,
+          # because otherwise it looks like the command was ignored.
+          $permission = gh api "repos/$($env:GITHUB_REPOSITORY)/collaborators/$($env:WHO)/permission" --jq .permission
+          if ($LASTEXITCODE -ne 0 -or -not $permission) {
+            throw "Could not read what access $($env:WHO) has. The app needs Metadata: read for that."
+          }
+
+          if ($permission -notin @('admin', 'maintain', 'write')) {
+            Write-Host "$($env:WHO) has $permission here; ignoring the command."
+            exit 0
+          }
+
+          # A reaction is the acknowledgement: the work takes a minute and the issue shows it was
+          # heard. Best effort, because it needs Reactions: write, which the app may not have.
+          gh api -X POST "repos/$($env:GITHUB_REPOSITORY)/issues/comments/$($env:COMMENT)/reactions" -f content=eyes 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host 'Could not add the reaction; the app may not have Reactions: write.'
+          }
+
+          Write-Host "$($env:WHO) asked for $mode."
+          'run=true' >> $env:GITHUB_OUTPUT
+          'mode=' + $mode >> $env:GITHUB_OUTPUT
+
+  check:
+    needs: command
+    if: needs.command.outputs.run == 'true'
+    uses: ./.github/workflows/check.yml
+    with:
+      issue: ${{ github.event.issue.number }}
+      mode: ${{ needs.command.outputs.mode }}
+      actor: ${{ github.event.comment.user.login }}
+    secrets: inherit

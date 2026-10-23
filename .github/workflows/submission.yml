@@ -1,193 +1,35 @@
 name: Process a mod submission
 
-# A submission arrives as an issue, written by the website. This workflow is what makes
-# it a listing without asking the person to open a pull request: it checks the release,
-# reads the code, and opens the pull request with the checked entry.
+# A submission arrives as an issue, written by the website. This is the whole of the trigger: the
+# work is in check.yml, which a maintainer's command calls too.
 #
-# The merge is still a maintainer's. A catalogue is a list of code people install, and
-# the step that puts an entry in it is one a person should be able to see and undo.
+# When the checks pass and the review agrees, the pull request is opened without anyone being
+# asked. Otherwise everything the run found is written to the issue, and a maintainer decides.
 
 on:
   issues:
-    # Opened and reopened, but not edited: a re-run of the workflow would open a second
-    # pull request for the same submission, and a person fixing a typo should not cause
-    # that. A failed run is retried by reopening the issue or by dispatching it by hand.
+    # Opened and reopened, but not edited: a re-run of the workflow would open a second pull
+    # request for the same submission, and a person fixing a typo should not cause that. A failed
+    # run is retried with /recheck on the issue.
     types: [opened, reopened]
   workflow_dispatch:
     inputs:
-      body:
-        description: 'The submission body, as the website wrote it.'
+      issue:
+        description: 'The submission issue number.'
         required: true
         type: string
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
-  process:
+  check:
     # Only the issues the website writes, and only ones that are really a submission.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       startsWith(github.event.issue.title, 'Mod submission:')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Get the submission
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
-          MANUAL_BODY: ${{ inputs.body }}
-        run: |
-          $body = if ($env:MANUAL_BODY) { $env:MANUAL_BODY } else { $env:ISSUE_BODY }
-          if (-not $body) { throw 'The submission has no body.' }
-          if ($body -notmatch 'swyf-modding-submission') {
-            throw 'This issue is not a submission: it does not carry the marker the site writes.'
-          }
-
-          # Written to a file rather than passed as an argument: the body has lines in
-          # it, and a command-line argument cannot carry a newline safely.
-          Set-Content -LiteralPath ./submission.md -Value $body -NoNewline
-
-          if ($env:MANUAL_BODY) {
-            'subject=Mod submission: manual' >> $env:GITHUB_OUTPUT
-            'repo=' >> $env:GITHUB_OUTPUT
-          } else {
-            'subject=' + $env:ISSUE_TITLE >> $env:GITHUB_OUTPUT
-            # The repository out of the title, which is "Mod submission: <repo>".
-            'repo=' + ($env:ISSUE_TITLE -replace '^Mod submission:\s*', '') >> $env:GITHUB_OUTPUT
-          }
-
-      - name: Check the release and read the code
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./tools/submission.ps1 -BodyFile ./submission.md -OutDir ./out
-
-      # ------------------------------------------------------------------ the review
-      #
-      # The review is a container, not a step in this workflow. It reads the mod's code and
-      # never runs it, and it is the only thing here that knows how to ask a model anything.
-      #
-      # REVIEW_URL points at it. Without one the submission is listed on the checks alone,
-      # which is what happens today and is a deliberate choice rather than an accident.
-      #
-      # The verdict has to be "ok". "unsure" holds the submission back for a person, and
-      # "refuse" stops it: a submission that is not listed is a nuisance, and one that is
-      # listed and should not have been is a mod running in somebody's game.
-      - name: Review the submission
-        shell: pwsh
-        env:
-          REVIEW_URL: ${{ vars.REVIEW_URL }}
-          SUBJECT_REPO: ${{ steps.submission.outputs.repo }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if (-not $env:REVIEW_URL) {
-            Write-Host 'No review service is configured; the checks above are the gate.' -ForegroundColor Yellow
-            exit 0
-          }
-
-          $catalogue = Get-Content -Raw ./out/mods.json | ConvertFrom-Json
-          $mod = $catalogue.mods | Where-Object { $_.repo -eq $env:SUBJECT_REPO } | Select-Object -First 1
-          if (-not $mod) {
-            Write-Host 'The entry is not in the new catalogue; nothing to review.'
-            exit 0
-          }
-
-          $body = @{
-            mods = @(@{
-              owner      = $mod.owner
-              repo       = $mod.repo
-              release    = $mod.approvedVersion
-              displayName = $mod.displayName
-              summary    = $mod.summary
-              files      = @($mod.files | ForEach-Object {
-                @{ fileName = $_.fileName; sha256 = $_.sha256; capabilities = @($_.capabilities) }
-              })
-            })
-          } | ConvertTo-Json -Depth 8
-
-          $headers = @{ 'x-github-token' = $env:GH_TOKEN }
-          $response = Invoke-RestMethod -Uri "$env:REVIEW_URL/review" -Method Post -ContentType 'application/json' -Headers $headers -Body $body
-          $job = $response.id
-          if (-not $job) { throw 'The review service did not return a job id.' }
-
-          # The review takes as long as a model takes, so the answer is fetched
-          # rather than waited for: the request starts the job and comes back,
-          # and this asks again until it is done.
-          $result = $null
-          for ($i = 0; $i -lt 120; $i++) {
-            Start-Sleep -Seconds 10
-            $poll = Invoke-RestMethod -Uri "$env:REVIEW_URL/result?id=$job" -Headers $headers
-            if (-not $poll.pending) { $result = $poll; break }
-          }
-          if (-not $result) { throw 'The review did not finish.' }
-
-          $verdict = $result.results | Select-Object -First 1
-          $headline = switch ($verdict.verdict) {
-            'ok' { 'Ready to list' }
-            'unsure' { 'Needs a look from a maintainer' }
-            'refuse' { 'Not listed' }
-            default { 'Reviewed' }
-          }
-          Write-Host "review: $headline - $($verdict.reason)"
-
-          # The message is for the submitter as much as the maintainer: a plain
-          # heading, then what the code does and what happens next. The raw
-          # verdict words and the models behind them are not shown.
-          $review = @(
-            "**$headline**"
-            ""
-            $verdict.reason
-            ""
-            "<sub>Automated review of the code. A maintainer makes the final decision.</sub>"
-          ) -join "`n"
-          Set-Content -LiteralPath ./out/review.md -Value $review
-
-          if ($verdict.verdict -ne 'ok') {
-            throw "The submission was not listed. $($verdict.reason)"
-          }
-
-      - name: Open the pull request
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          SUBJECT: ${{ steps.submission.outputs.subject }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-        run: |
-          # One branch per issue, so a re-run updates the same pull request rather
-          # than opening a second one.
-          $branch = if ($env:ISSUE_NUMBER) { "submission/issue-$($env:ISSUE_NUMBER)" } else { "submission/manual-$([Guid]::NewGuid().ToString('N').Substring(0,8))" }
-
-          git config user.name 'swyf-modding-bot'
-          git config user.email 'bot@swyf-modding.invalid'
-          git checkout -B $branch
-          Copy-Item ./out/mods.json ./mods.json -Force
-          git add mods.json
-          git commit -m "Add a mod from a submission: $env:SUBJECT"
-          git push -u origin $branch
-
-          $existing = gh pr list --head $branch --state all --json number --jq '.[0].number'
-          if ($existing) {
-            Write-Host "A pull request for this submission already exists (#$existing); updating it."
-            gh pr edit $existing --body (Get-Content -Raw ./out/submission-report.md)
-            exit 0
-          }
-
-          $body = @"
-          A mod submission, processed automatically.
-
-          The entry was filled in and checked by the website, the release was
-          downloaded and read, and the file hashes and capabilities in it come from
-          the code itself.
-
-          $(Get-Content -Raw ./out/submission-report.md)
-
-          $(if (Test-Path ./out/review.md) { "`n### Review`n`n$(Get-Content -Raw ./out/review.md)" } else { "" })
-          "@
-
-          gh pr create --title $env:SUBJECT --body $body --base main --head $branch
+    uses: ./.github/workflows/check.yml
+    with:
+      issue: ${{ github.event.issue.number || inputs.issue }}
+      mode: auto
+    secrets: inherit

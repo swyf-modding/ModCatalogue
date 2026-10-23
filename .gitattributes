@@ -1,0 +1,9 @@
+# The line endings are pinned rather than left to the machine.
+#
+# The catalogue is read by Switchboard on Windows and by the tools on whatever runs them,
+# and a file whose endings change depending on who checked it out is a file whose diff
+# is noise. The repository's history already has a commit about normalising them.
+* text=auto eol=lf
+
+# The catalogue itself is read by other people's tools, so it is exactly this shape.
+mods.json text eol=lf
