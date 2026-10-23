@@ -151,7 +151,7 @@ describe("a streamed reply", () => {
   const event = (delta: string) =>
     `data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`;
 
-  async function streamed(...chunks: string[]): Promise<string> {
+  async function streamed(...chunks: string[]): Promise<{ content: string; preview: string }> {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
@@ -165,7 +165,8 @@ describe("a streamed reply", () => {
   }
 
   test("is joined back together", async () => {
-    expect(await streamed(event('{"verdict":"ok"}'), "data: [DONE]\n\n")).toBe('{"verdict":"ok"}');
+    const read = await streamed(event('{"verdict":"ok"}'), "data: [DONE]\n\n");
+    expect(read.content).toBe('{"verdict":"ok"}');
   });
 
   test("survives a line split across two reads", async () => {
@@ -174,13 +175,18 @@ describe("a streamed reply", () => {
     const body = event('{"verdict":"ok"}') + "data: [DONE]\n\n";
     const cut = Math.floor(body.length / 2);
 
-    expect(await streamed(body.slice(0, cut), body.slice(cut))).toBe('{"verdict":"ok"}');
+    expect((await streamed(body.slice(0, cut), body.slice(cut))).content).toBe('{"verdict":"ok"}');
   });
 
   test("ignores keep-alives and anything that is not a chunk", async () => {
-    expect(await streamed(": ping\n\n", "data: {not json}\n\n", event('{"verdict":"ok"}'))).toBe(
-      '{"verdict":"ok"}',
-    );
+    const read = await streamed(": ping\n\n", "data: {not json}\n\n", event('{"verdict":"ok"}'));
+    expect(read.content).toBe('{"verdict":"ok"}');
+  });
+
+  test("keeps the raw stream, for a reply that parsed to nothing", async () => {
+    const read = await streamed(event(""), "data: [DONE]\n\n");
+    expect(read.content).toBe("");
+    expect(read.preview).toContain('"delta"');
   });
 });
 

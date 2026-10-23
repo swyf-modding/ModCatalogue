@@ -746,24 +746,33 @@ async function decideViaCli(system: string, user: string): Promise<Decision | nu
 /**
  * A streamed reply, read as it arrives.
  *
+ * Returns the text and the start of the raw stream. The second is for the case where a model
+ * answers with something that is not a verdict: an empty content with no raw text is a failure
+ * nobody can diagnose, and "the reply was empty" is worth reading next to what arrived.
+ *
  * A review sends a whole source tree, and the answer can take minutes. Asked without streaming,
  * the connection carries nothing for that whole time, and a proxy that is tired of waiting closes
  * it - which is the reset that looks like the model failing. Streamed, the first token arrives in
  * seconds and the bytes keep coming, so there is no idle connection to give up on.
  */
-export async function readStream(response: Response): Promise<string> {
+export async function readStream(
+  response: Response,
+): Promise<{ content: string; preview: string }> {
   const reader = response.body?.getReader();
   if (!reader) throw new Error("the reply had no body");
 
   const decoder = new TextDecoder();
   let buffer = "";
+  let raw = "";
   let content = "";
 
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
+    const text = decoder.decode(value, { stream: true });
+    if (raw.length < 2000) raw += text;
+    buffer += text;
 
     let newline: number;
     while ((newline = buffer.indexOf("\n")) >= 0) {
@@ -776,7 +785,11 @@ export async function readStream(response: Response): Promise<string> {
 
       try {
         const chunk = JSON.parse(data);
-        const delta = chunk?.choices?.[0]?.delta?.content ?? chunk?.choices?.[0]?.message?.content;
+        const delta =
+          chunk?.choices?.[0]?.delta?.content ??
+          chunk?.choices?.[0]?.message?.content ??
+          // A reasoning model streams its thinking first; the answer, if there is one, comes after.
+          chunk?.choices?.[0]?.delta?.reasoning_content;
         if (typeof delta === "string") content += delta;
       } catch {
         // A keep-alive, or a line split across reads; the buffer handles the second case.
@@ -786,7 +799,7 @@ export async function readStream(response: Response): Promise<string> {
     if (content.length > 200_000) break;
   }
 
-  return content;
+  return { content, preview: raw };
 }
 
 function reviewerUrl(baseUrl: string): string {
@@ -821,7 +834,9 @@ async function decide(
           },
           body: JSON.stringify({
             model,
-            max_tokens: 800,
+            // A review answer is two sentences, but a model that reasons first spends tokens
+            // before it writes them, and a cap that fits the answer leaves it empty.
+            max_tokens: Number(process.env.SMART_MAX_TOKENS ?? 2000),
             temperature: 0.1,
             // Streamed, so a long review is not a silent connection. A provider that ignores this
             // answers with JSON, which the content type says.
@@ -841,16 +856,25 @@ async function decide(
 
         const type = res.headers.get("content-type") ?? "";
         let content: string;
+        let preview: string;
         if (type.includes("text/event-stream")) {
-          content = await readStream(res);
+          ({ content, preview } = await readStream(res));
         } else {
-          const json: any = await res.json();
-          content = json?.choices?.[0]?.message?.content ?? "";
+          const raw = await res.text();
+          preview = raw;
+          try {
+            content = JSON.parse(raw)?.choices?.[0]?.message?.content ?? "";
+          } catch {
+            content = "";
+          }
         }
 
         const parsed = typeof content === "string" ? extractVerdict(content) : null;
         if (!parsed) {
-          failed(model, `no usable verdict in the reply: ${String(content).slice(0, 200)}`);
+          // What arrived is more useful than what it parsed to: an empty answer, a refusal, or a
+          // provider that streams in a shape this does not read all look the same from here.
+          const sample = (content || preview || "(nothing)").replace(/\s+/g, " ").slice(0, 400);
+          failed(model, `no usable verdict in the reply: ${sample}`);
           break;
         }
         decided = { verdict: parsed.verdict, reason: parsed.reason, model };
