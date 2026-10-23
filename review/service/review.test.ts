@@ -151,7 +151,7 @@ describe("a streamed reply", () => {
   const event = (delta: string) =>
     `data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`;
 
-  async function streamed(...chunks: string[]): Promise<{ content: string; preview: string }> {
+  async function streamed(...chunks: string[]) {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
@@ -181,6 +181,29 @@ describe("a streamed reply", () => {
   test("ignores keep-alives and anything that is not a chunk", async () => {
     const read = await streamed(": ping\n\n", "data: {not json}\n\n", event('{"verdict":"ok"}'));
     expect(read.content).toBe('{"verdict":"ok"}');
+  });
+
+  test("keeps thinking out of the answer", async () => {
+    // A reasoning model streams its thinking first. Merged into the answer it reads as a reviewer
+    // that rambled instead of answering, which is exactly what the issue showed.
+    const thinking = `data: ${JSON.stringify({
+      choices: [{ delta: { reasoning_content: "We need answer JSON only." } }],
+    })}\n\n`;
+
+    const read = await streamed(thinking, event('{"verdict":"ok"}'), "data: [DONE]\n\n");
+
+    expect(read.reasoning).toContain("answer JSON only");
+    expect(read.content).toBe('{"verdict":"ok"}');
+  });
+
+  test("records why the model stopped", async () => {
+    const cut = `data: ${JSON.stringify({
+      choices: [{ delta: { reasoning_content: "thinking" }, finish_reason: "length" }],
+    })}\n\n`;
+
+    const read = await streamed(cut);
+    expect(read.finish).toBe("length");
+    expect(read.content).toBe("");
   });
 
   test("keeps the raw stream, for a reply that parsed to nothing", async () => {
