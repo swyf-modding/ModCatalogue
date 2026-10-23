@@ -1,14 +1,10 @@
 // Staging a mod for review, and asking for a verdict.
 //
-// The mod's code is downloaded and read. It is never run: the files are staged
-// read-only, and the review runs somewhere else.
+// The code is downloaded and read, never run: files are staged read-only and the review runs
+// somewhere else. The agent is a separate program named by REVIEW_COMMAND, given a directory,
+// and it must leave a verdict.json behind - so it can be swapped without touching this.
 //
-// The review command is a separate program, named by REVIEW_COMMAND, and it
-// is given a directory and a prompt and has to leave a verdict.json behind.
-// That is the whole contract, so the agent can be swapped without touching
-// anything else.
-//
-// Plain TypeScript, run by Bun: no build step, no compile before it can start.
+// Plain TypeScript, run by Bun: no build step.
 
 import { execFile } from "node:child_process";
 import { mkdtemp, rm, mkdir, chmod, readdir } from "node:fs/promises";
@@ -19,6 +15,8 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 
 const GITHUB_API = "https://api.github.com";
 const MAX_ZIP_BYTES = 256 * 1024 * 1024;
+/** How much a release may expand to once it is unpacked. */
+const MAX_UNPACKED_BYTES = 512 * 1024 * 1024;
 
 /** One file the review knows about, as the catalogue's scan found it. */
 export interface ReviewFile {
@@ -126,6 +124,79 @@ function run(
   });
 }
 
+/** The hosts the GitHub token is sent to. An asset is served from github.com and redirects to a
+ *  CDN, so the redirects are followed by hand and the header is left behind at GitHub. */
+const TOKEN_HOSTS = new Set(["api.github.com", "github.com"]);
+
+/** The headers to send to a host: the token for GitHub, everything else without it. */
+export function headersForHost(
+  headers: Record<string, string>,
+  host: string,
+): Record<string, string> {
+  if (TOKEN_HOSTS.has(host)) return { ...headers };
+  const sent = { ...headers };
+  delete sent.Authorization;
+  return sent;
+}
+
+/** Fetch a URL, following redirects by hand so the token's host can be decided per hop. */
+async function fetchWithRedirects(
+  url: string,
+  headers: Record<string, string>,
+  limit = 5,
+): Promise<Response | null> {
+  let current = url;
+
+  for (let hop = 0; hop < limit; hop++) {
+    let host: string;
+    try {
+      host = new URL(current).host;
+    } catch {
+      return null;
+    }
+
+    const response = await fetch(current, {
+      headers: headersForHost(headers, host),
+      redirect: "manual",
+      // Bounded: a stalled connection should come back as "could not read it", not as a job
+      // that sits at "pending" until somebody notices.
+      signal: AbortSignal.timeout(120_000),
+    });
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (!location) return null;
+      current = new URL(location, current).toString();
+      continue;
+    }
+
+    return response;
+  }
+
+  return null;
+}
+
+/**
+ * A GitHub request, retried without the token when the token is what failed.
+ *
+ * An installation token only sees the app's own repositories, and the mod being reviewed is
+ * somebody else's. Public data needs no permission, so a 403 or 404 is retried unauthenticated
+ * rather than reported as a missing release.
+ */
+export async function getGitHub(
+  url: string,
+  headers: Record<string, string>,
+): Promise<Response | null> {
+  const first = await fetchWithRedirects(url, headers);
+  if (first && first.ok) return first;
+  if (!headers.Authorization) return first;
+  if (!first || (first.status !== 403 && first.status !== 404)) return first;
+
+  const without = { ...headers };
+  delete without.Authorization;
+  return fetchWithRedirects(url, without);
+}
+
 /** Download the release's zip. It is opened, never run. */
 async function downloadRelease(
   mod: ModToReview,
@@ -136,18 +207,16 @@ async function downloadRelease(
     Accept: "application/vnd.github+json",
     "User-Agent": "swyf-modding-review",
   };
-  // A token raises the GitHub limit from 60 calls an hour to 5000, and a review
-  // makes two calls - the release and the catalogue - so a review is a thing
-  // that wants one.
+  // A token raises the GitHub limit from 60 calls an hour to 5000, and a review makes two.
   if (token ?? process.env.GITHUB_TOKEN) {
     headers.Authorization = `Bearer ${token ?? process.env.GITHUB_TOKEN}`;
   }
 
-  const response = await fetch(
+  const response = await getGitHub(
     `${GITHUB_API}/repos/${mod.owner}/${mod.repo}/releases/tags/${encodeURIComponent(mod.release)}`,
-    { headers },
+    headers,
   );
-  if (!response.ok) return null;
+  if (!response || !response.ok) return null;
 
   const body = (await response.json()) as {
     assets?: { name?: string; browser_download_url?: string; size?: number }[];
@@ -160,8 +229,8 @@ async function downloadRelease(
   const declared = Number(zip.size ?? 0);
   if (declared > MAX_ZIP_BYTES) return null;
 
-  const download = await fetch(zip.browser_download_url, { headers });
-  if (!download.ok) return null;
+  const download = await getGitHub(zip.browser_download_url, headers);
+  if (!download || !download.ok) return null;
 
   const bytes = new Uint8Array(await download.arrayBuffer());
   if (bytes.length > MAX_ZIP_BYTES) return null;
@@ -170,12 +239,11 @@ async function downloadRelease(
 }
 
 /**
- * Unpack a zip, reading it with node's own zlib.
+ * Unpack a zip with node's own zlib.
  *
- * Node has no zip in the standard library, but a zip's entries are either stored or
- * deflated, and zlib can inflate a raw deflate stream. Doing it here rather than
- * shelling out to unzip means there is no system program to be missing from the
- * image, and a failure is a failure rather than a silently empty directory.
+ * Node has no zip in the standard library, but an entry is either stored or deflated and zlib
+ * can inflate a raw deflate stream. Doing it here rather than shelling out to unzip means
+ * there is no system program to be missing from the image.
  */
 async function unpack(zipBytes: Uint8Array, modDir: string): Promise<string[]> {
   await mkdir(modDir, { recursive: true });
@@ -197,12 +265,15 @@ async function unpack(zipBytes: Uint8Array, modDir: string): Promise<string[]> {
   let offset = view.getUint32(eocd + 16, true);
 
   const names: string[] = [];
+  let unpacked = 0;
+
   for (let i = 0; i < count; i++) {
     if (offset + 46 > zipBytes.length) break;
     if (view.getUint32(offset, true) !== 0x02014b50) break;
 
     const method = view.getUint16(offset + 10, true);
     const compressedSize = view.getUint32(offset + 20, true);
+    const uncompressedSize = view.getUint32(offset + 24, true);
     const nameLength = view.getUint16(offset + 28, true);
     const extraLength = view.getUint16(offset + 30, true);
     const commentLength = view.getUint16(offset + 32, true);
@@ -213,6 +284,13 @@ async function unpack(zipBytes: Uint8Array, modDir: string): Promise<string[]> {
     );
 
     if (!name.endsWith("/")) {
+      // A zip bomb: the directory declares the sizes, so they are read before anything is
+      // written.
+      unpacked += uncompressedSize;
+      if (uncompressedSize > MAX_UNPACKED_BYTES || unpacked > MAX_UNPACKED_BYTES) {
+        throw new Error(`the release expands to more than ${MAX_UNPACKED_BYTES} bytes`);
+      }
+
       // The local header has its own name and extra lengths, which are the ones that
       // decide where the data starts.
       const localNameLength = view.getUint16(localOffset + 26, true);
@@ -252,13 +330,9 @@ async function unpack(zipBytes: Uint8Array, modDir: string): Promise<string[]> {
 /**
  * Stage the mod's source, read-only.
  *
- * The release holds binaries, and the question the review asks - does the summary
- * describe what the code does? - cannot be answered from binaries. So the source
- * is cloned at the release's tag and put where the agent can read it.
- *
- * A clone does not run the code it fetches: there are no remote hooks in git, and
- * nothing in the tree is built or started. It is a copy, and it is then made
- * read-only.
+ * The question - does the summary describe the code? - cannot be answered from binaries, so
+ * the source is cloned at the release's tag. A clone does not run what it fetches: no remote
+ * hooks, nothing built or started.
  */
 async function stageSource(mod: ModToReview, workDir: string): Promise<string[]> {
   const dir = join(workDir, "source");
@@ -341,6 +415,29 @@ export function parseVerdict(text: string): Verdict | null {
 }
 
 /**
+ * Read a verdict out of what the agent left behind.
+ *
+ * verdict.json is what the agent wrote down, and it is the answer. The transcript is
+ * supplementary: an agent that narrates may print a JSON object of its own, and that
+ * object does not get to overrule the file the agent deliberately left.
+ */
+export function readVerdict(workDir: string): Verdict | null {
+  const verdictFile = join(workDir, "verdict.json");
+  const transcriptFile = join(workDir, "agent-output.txt");
+
+  if (existsSync(verdictFile)) {
+    const verdict = parseVerdict(readFileSync(verdictFile, "utf8"));
+    if (verdict) return verdict;
+  }
+
+  if (existsSync(transcriptFile)) {
+    return parseVerdict(readFileSync(transcriptFile, "utf8"));
+  }
+
+  return null;
+}
+
+/**
  * Review one mod.
  *
  * Returns the verdict, or an "unsure" saying why it could not be reviewed.
@@ -374,7 +471,7 @@ export async function reviewMod(
     // from what it is reviewing.
     await chmod(workDir, 0o755);
 
-    const command = process.env.REVIEW_COMMAND ?? "/app/service/review-freebuff.ts";
+    const command = process.env.REVIEW_COMMAND ?? "/app/service/review-opencode.ts";
     await run(process.execPath, [command, workDir], {
       cwd: workDir,
       timeout: 15 * 60_000,
@@ -386,13 +483,10 @@ export async function reviewMod(
     // The agent is asked for JSON only, but if it narrated, the last JSON object
     // in what it printed is the verdict. The transcript is supplementary: a
     // driver that writes a verdict and no transcript is still a verdict.
-    const verdict = parseVerdict(
-      readFileSync(join(workDir, "verdict.json"), "utf8") +
-        "\n" +
-        (existsSync(join(workDir, "agent-output.txt"))
-          ? readFileSync(join(workDir, "agent-output.txt"), "utf8")
-          : ""),
-    );
+    //
+    // verdict.json comes first, and on its own: it is what the agent left behind,
+    // and a transcript that disagrees with it is narration, not an answer.
+    const verdict = readVerdict(workDir);
 
     // A review that could not read the code is not a review. If nothing arrived -
     // no release and no source - then the answer is "unsure" whatever the agent

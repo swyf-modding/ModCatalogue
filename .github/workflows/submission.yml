@@ -6,6 +6,12 @@ name: Process a mod submission
 #
 # The merge is still a maintainer's. A catalogue is a list of code people install, and
 # the step that puts an entry in it is one a person should be able to see and undo.
+#
+# The pull request is opened as the project's GitHub App rather than with GITHUB_TOKEN,
+# and that is not cosmetic. A pull request opened with GITHUB_TOKEN does not trigger the
+# workflows that would check it - GitHub suppresses events caused by that token - so the
+# gate would never run on a submission. An installation token has no such restriction,
+# and it also attributes the commit to the bot rather than to whoever dispatched the run.
 
 on:
   issues:
@@ -21,8 +27,8 @@ on:
         type: string
 
 permissions:
-  contents: write
-  pull-requests: write
+  # The bot's installation token carries the write permissions; this one only reads.
+  contents: read
 
 jobs:
   process:
@@ -32,12 +38,25 @@ jobs:
       startsWith(github.event.issue.title, 'Mod submission:')
     runs-on: ubuntu-latest
     steps:
+      # Scoped to this repository, so the token cannot touch anything else even if the
+      # app is installed more widely.
+      - name: Sign in as the bot
+        id: bot
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.bot.outputs.token }}
 
       - name: Get the submission
+        id: submission
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           MANUAL_BODY: ${{ inputs.body }}
@@ -61,10 +80,19 @@ jobs:
             'repo=' + ($env:ISSUE_TITLE -replace '^Mod submission:\s*', '') >> $env:GITHUB_OUTPUT
           }
 
+      # Reading is a different job from writing, and it needs a different credential.
+      #
+      # The mod is usually somebody else's repository, and an installation token can only
+      # see the repositories its app is installed on. A token with no scopes reads any
+      # public repository and raises the API limit from 60 requests an hour to 5000.
+      # Without one this still works - it is just slower, and a busy hour would hit the
+      # limit. It is deliberately NOT the app's token as a fallback: that one would be
+      # refused by repositories the app does not know, which reads as a missing release
+      # rather than as a missing permission.
       - name: Check the release and read the code
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.BOT_READ_TOKEN }}
         run: ./tools/submission.ps1 -BodyFile ./submission.md -OutDir ./out
 
       # ------------------------------------------------------------------ the review
@@ -83,15 +111,27 @@ jobs:
         env:
           REVIEW_URL: ${{ vars.REVIEW_URL }}
           SUBJECT_REPO: ${{ steps.submission.outputs.repo }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The same read token, for the same reason: the review reads the mod's repository,
+          # which is usually not one the app is installed on.
+          GH_TOKEN: ${{ secrets.BOT_READ_TOKEN }}
         run: |
           if (-not $env:REVIEW_URL) {
             Write-Host 'No review service is configured; the checks above are the gate.' -ForegroundColor Yellow
             exit 0
           }
 
+          # A manual dispatch has no issue title to take the repository from, so it comes out
+          # of the body instead. Without this a retry by hand would quietly skip the review.
+          $repo = $env:SUBJECT_REPO
+          if (-not $repo) {
+            $fenced = [regex]::Match((Get-Content -Raw ./submission.md), '(?s)```json\s*(.*?)\s*```')
+            if ($fenced.Success) {
+              try { $repo = ($fenced.Groups[1].Value | ConvertFrom-Json).repo } catch { $repo = $null }
+            }
+          }
+
           $catalogue = Get-Content -Raw ./out/mods.json | ConvertFrom-Json
-          $mod = $catalogue.mods | Where-Object { $_.repo -eq $env:SUBJECT_REPO } | Select-Object -First 1
+          $mod = $catalogue.mods | Where-Object { $_.repo -eq $repo } | Select-Object -First 1
           if (-not $mod) {
             Write-Host 'The entry is not in the new catalogue; nothing to review.'
             exit 0
@@ -105,12 +145,16 @@ jobs:
               displayName = $mod.displayName
               summary    = $mod.summary
               files      = @($mod.files | ForEach-Object {
-                @{ fileName = $_.fileName; sha256 = $_.sha256; capabilities = @($_.capabilities) }
+                @{ fileName = $_.fileName; sha256 = $_.sha256; capabilities = @($_.capabilities); bepInPlugin = @($_.bepInPlugin) }
               })
             })
           } | ConvertTo-Json -Depth 8
 
-          $headers = @{ 'x-github-token' = $env:GH_TOKEN }
+          # Only when there is one: an empty header would be a token the service then tries
+          # to use, and "no token" is a state the service handles properly.
+          $headers = @{}
+          if ($env:GH_TOKEN) { $headers['x-github-token'] = $env:GH_TOKEN }
+
           $response = Invoke-RestMethod -Uri "$env:REVIEW_URL/review" -Method Post -ContentType 'application/json' -Headers $headers -Body $body
           $job = $response.id
           if (-not $job) { throw 'The review service did not return a job id.' }
@@ -137,8 +181,9 @@ jobs:
       - name: Open the pull request
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
           GH_REPO: ${{ github.repository }}
+          BOT_SLUG: ${{ steps.bot.outputs.app-slug }}
           SUBJECT: ${{ steps.submission.outputs.subject }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
@@ -146,11 +191,24 @@ jobs:
           # than opening a second one.
           $branch = if ($env:ISSUE_NUMBER) { "submission/issue-$($env:ISSUE_NUMBER)" } else { "submission/manual-$([Guid]::NewGuid().ToString('N').Substring(0,8))" }
 
-          git config user.name 'swyf-modding-bot'
-          git config user.email 'bot@swyf-modding.invalid'
+          # The app's own identity, so the commit says a bot made it and which one. The
+          # address is the noreply form GitHub gives an app's commits.
+          $name = if ($env:BOT_SLUG) { "$($env:BOT_SLUG)[bot]" } else { 'swyf-modding-bot' }
+          $email = if ($env:BOT_SLUG) { "$($env:BOT_SLUG)[bot]@users.noreply.github.com" } else { 'bot@swyf-modding.invalid' }
+          git config user.name $name
+          git config user.email $email
           git checkout -B $branch
           Copy-Item ./out/mods.json ./mods.json -Force
           git add mods.json
+
+          # A submission for a mod that is already listed at exactly this release changes
+          # nothing. That is not a failure - it is the catalogue already saying it - and
+          # committing an empty change would turn it into a red run with a confusing message.
+          if (-not (git status --porcelain)) {
+            Write-Host 'Nothing changed: the catalogue already lists this release. No pull request to open.'
+            exit 0
+          }
+
           git commit -m "Add a mod from a submission: $env:SUBJECT"
           git push -u origin $branch
 

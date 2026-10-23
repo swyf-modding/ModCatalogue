@@ -1,39 +1,27 @@
 // The review service.
 //
-// It answers one question: is this catalogue entry honest? It reads the mod's
-// code and never runs it, and it says "unsure" whenever it cannot tell - which
-// holds the submission back for a person rather than listing something it is
-// not sure about.
+// It answers one question - is this catalogue entry honest? - by reading the mod's code, and
+// never running it. When it cannot tell it says "unsure", which holds the submission for a
+// person rather than listing something it is not sure about.
 //
-// The endpoint is shaped so that both jobs are the same call: a submission is
-// one mod, and re-reviewing the whole catalogue is a list of them.
+// A review takes as long as a model takes, and Bun closes a request after a few minutes, so a
+// request starts the job and returns an id; the answer is fetched from /result.
 //
-// Plain TypeScript, run by Bun: no build step, no compile before it can start.
-//
-// A review takes as long as a language model takes, and Bun closes a request
-// that takes longer than a few minutes. So the request starts the job and
-// comes back with an id, and the answer is fetched from /result. That is the
-// whole reason for the two endpoints rather than one.
+// Plain TypeScript, run by Bun: no build step.
 
-import { reviewMod, type ModToReview } from "./review";
+import { getGitHub, reviewMod, type ModToReview } from "./review";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const MAX_MODS = Number(process.env.MAX_MODS_PER_REQUEST ?? 32);
 const GITHUB_API = "https://api.github.com";
 
-/**
- * The token to read GitHub with.
- *
- * A caller may hand one over for the request - the workflow has one and the
- * service does not need to hold it - and otherwise the container's own token
- * is used. Either way, one call is a review, so the 60-an-hour limit is the
- * difference between a few submissions and none.
- */
+/** The token to read GitHub with: the caller's, or the container's own. */
 function tokenFor(req: Request): string | undefined {
   return req.headers.get("x-github-token") ?? process.env.GITHUB_TOKEN ?? undefined;
 }
 
-function json(res: Response, body: unknown, status = 200): Response {
+/** A JSON reply. The body is written out here, so every reply is the same shape. */
+function json(body: unknown, status = 200): Response {
   const text = JSON.stringify(body);
   return new Response(text, {
     status,
@@ -56,20 +44,15 @@ async function fetchCatalogue(token?: string) {
 
   const repo = process.env.CATALOGUE_REPO ?? "swyf-modding/ModCatalogue";
 
-  // The catalogue is read over the network, and the network fails. A failed
-  // read is not an answer about any mod, so it is reported as "could not read
-  // the catalogue" rather than thrown: the caller is told something is wrong
-  // instead of being shown a connection that closed.
-  let response: Response;
+  // A failed read is not an answer about any mod, so it is reported as "could not read the
+  // catalogue" rather than thrown.
+  let response: Response | null;
   try {
-    response = await fetch(`${GITHUB_API}/repos/${repo}/contents/mods.json?ref=main`, {
-      headers,
-      signal: AbortSignal.timeout(30_000),
-    });
+    response = await getGitHub(`${GITHUB_API}/repos/${repo}/contents/mods.json?ref=main`, headers);
   } catch {
     return [];
   }
-  if (!response.ok) return [];
+  if (!response || !response.ok) return [];
 
   const file = (await response.json().catch(() => null)) as
     | { content?: string; encoding?: string }
@@ -135,8 +118,7 @@ async function start(mods: ModToReview[], token?: string): Promise<string> {
   const promise = (async () => {
     const results = [];
     for (const mod of mods) {
-      // One at a time, on purpose: the agent is a person-sized thing, and a
-      // queue of them all at once is a queue of them all at once.
+      // One at a time, on purpose: each review is a model-sized job.
       results.push({
         owner: mod.owner,
         repo: mod.repo,
@@ -149,8 +131,7 @@ async function start(mods: ModToReview[], token?: string): Promise<string> {
 
   jobs.set(id, { id, mods, promise });
   void promise.finally(() => {
-    // Kept briefly so a client that asks a moment too early still gets an
-    // answer, then dropped: nothing here is worth keeping for long.
+    // Kept briefly so a client polling a moment late still gets its answer.
     setTimeout(() => jobs.delete(id), 60_000).unref?.();
   });
 
@@ -162,15 +143,27 @@ const server = Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
 
+    if (req.method === "GET" && url.pathname === "/") {
+      return json({
+        service: "the review service",
+        endpoints: {
+          "POST /review": "review the mods in the body: { mods: [...] }",
+          "POST /review-all": "review every mod in the catalogue",
+          "GET /result?id=...": "the result of a job: { pending } or { results }",
+          "GET /health": "is the service up",
+        },
+      });
+    }
+
     if (req.method === "GET" && url.pathname === "/health") {
-      return json(new Response(), { ok: true });
+      return json({ ok: true });
     }
 
     if (req.method === "GET" && url.pathname === "/result") {
       const id = url.searchParams.get("id") ?? "";
       const job = jobs.get(id);
       if (!job) {
-        return json(new Response(), { message: "no such job" }, 404);
+        return json({ message: "no such job" }, 404);
       }
 
       // Settled rather than awaited, so a client polling sees the answer the
@@ -179,9 +172,9 @@ const server = Bun.serve({
         job.promise.then(() => true),
         new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
       ]);
-      if (!done) return json(new Response(), { pending: true });
+      if (!done) return json({ pending: true });
 
-      return json(new Response(), { results: await job.promise });
+      return json({ results: await job.promise });
     }
 
     if (req.method === "POST" && (url.pathname === "/review" || url.pathname === "/review-all")) {
@@ -194,24 +187,24 @@ const server = Bun.serve({
         try {
           body = await req.json();
         } catch {
-          return json(new Response(), { message: "the request was not in the expected shape" }, 400);
+          return json({ message: "the request was not in the expected shape" }, 400);
         }
         mods = body.mods ?? [];
       }
 
       const chosen = mods.slice(0, MAX_MODS);
       if (chosen.length === 0) {
+        const isAll = url.pathname === "/review-all";
         return json(
-          new Response(),
-          { message: url.pathname === "/review-all" ? "the catalogue could not be read" : "no mods were given to review" },
-          url.pathname === "/review-all" ? 502 : 400,
+          { message: isAll ? "the catalogue could not be read" : "no mods were given to review" },
+          isAll ? 502 : 400,
         );
       }
 
-      return json(new Response(), { id: await start(chosen, tokenFor(req)) });
+      return json({ id: await start(chosen, tokenFor(req)) });
     }
 
-    return json(new Response(), { message: "not found" }, 404);
+    return json({ message: "not found" }, 404);
   },
 });
 

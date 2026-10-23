@@ -34,7 +34,7 @@ docker run -d --name swyf-review \
   --pids-limit 256 \
   --memory 2g \
   -e OPENROUTER_API_KEY=sk-or-... \
-  -e GITHUB_TOKEN=ghp_... \
+  -e GITHUB_TOKEN=... \
   swyf-review
 ```
 
@@ -63,6 +63,7 @@ POST /review-all
                   -> { "id": "..." } and the same polling
 
 GET  /health
+GET  /            what the service is and what it answers
 ```
 
 The request starts the job and comes back with an id, and the answer is fetched
@@ -99,7 +100,7 @@ Get an API key from OpenCode, then pass it to the container:
 docker run -d --name swyf-review -p 8080:8080 \
   -e OPENCODE_BASE_URL=https://opencode.ai \
   -e OPENCODE_API_KEY=<your-opencode-api-key> \
-  -e GITHUB_TOKEN=ghp_... \
+  -e GITHUB_TOKEN=... \
   swyf-review
 ```
 
@@ -128,19 +129,30 @@ unauthenticated limit is 60 calls an hour. So the service takes a token, and
 either of these is enough:
 
 ```sh
--e GITHUB_TOKEN=ghp_...        # the container's own token
+-e GITHUB_TOKEN=...            # the container's own token
 ```
 
-or the caller hands one over per request, which is what the workflow does, since
-the workflow already has one and the container does not need to hold a secret:
+or the caller hands one over per request, which is what the workflow does:
 
 ```text
-x-github-token: ghp_...
+x-github-token: ...
 ```
 
-A token raises the limit to 5000 calls an hour. Without one the service still
-works - a few submissions and then a `502` saying the catalogue could not be
-read, which is the honest answer when the limit is spent.
+The token's job is **reading other people's repositories**, which is most of what a
+review does, so it is deliberately not the app's installation token: an installation
+token can only see the repositories its app is installed on, and the mod being reviewed
+is somebody else's. A classic token with no scopes ticked is enough - public read needs
+no permission, and the token's only other job is to raise the limit from 60 requests an
+hour to 5000.
+
+Without a token the service still works: public data needs no credential. It just costs
+60 requests an hour, and after that a `502` saying the catalogue could not be read, which
+is the honest answer when the limit is spent.
+
+The token is for GitHub and for GitHub only. A release asset is served from
+`github.com`, which redirects to a CDN, and the redirect is followed by hand so
+that the token is left at the edge of GitHub rather than carried to whatever
+host the redirect names.
 
 ## What it reads
 
