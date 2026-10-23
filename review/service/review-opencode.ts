@@ -706,6 +706,16 @@ async function decideViaCli(system: string, user: string): Promise<Decision | nu
   return null;
 }
 
+/**
+ * Where the deciding model is asked.
+ *
+ * Go's models are on their own path; the other one serves the free tier, which only answers a
+ * logged-in OpenCode app and so cannot work from a container. `SMART_URL` overrides both.
+ */
+function reviewerUrl(baseUrl: string): string {
+  return process.env.SMART_URL ?? `${baseUrl}/inference/go/openai/v1/chat/completions`;
+}
+
 async function decide(
   baseUrl: string,
   apiKey: string,
@@ -714,10 +724,7 @@ async function decide(
 ): Promise<Decision | null> {
   if (SMART_MODE === "cli") return decideViaCli(system, user);
 
-  // Go's models are on their own path. The other one is the free tier, which only answers a
-  // logged-in OpenCode app and so cannot work from a container - so the default is the one that
-  // can, and SMART_URL points somewhere else for a deployment that is not on Go.
-  const url = process.env.SMART_URL ?? `${baseUrl}/inference/go/openai/v1/chat/completions`;
+  const url = reviewerUrl(baseUrl);
 
   for (const model of SMART_MODELS) {
     try {
@@ -785,8 +792,7 @@ async function main(): Promise<void> {
   // The two endpoints, once per review. A base URL with a path in it turns into a nonsense URL,
   // and this is the line that makes that obvious instead of looking like a TLS problem.
   if (SMART_MODE !== "cli") {
-    const chat = process.env.SMART_URL ?? `${baseUrl}/inference/openai/v1/chat/completions`;
-    console.error(`reviewer endpoint: ${chat} (triage: ${baseUrl}/zen/v1/systemone)`);
+    console.error(`reviewer endpoint: ${reviewerUrl(baseUrl)} (triage: ${baseUrl}/zen/v1/systemone)`);
   }
 
   const { files, skipped } = await collectSource(join(workDir, "source"));
