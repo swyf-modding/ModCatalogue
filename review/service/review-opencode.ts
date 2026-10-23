@@ -355,14 +355,16 @@ function jevUrl(baseUrl: string): string {
 }
 
 /**
- * A connection that went away, as opposed to one that was told no.
+ * Whether trying the same request again is worth it.
  *
- * The API drops a request now and then - a reset, or a proxy that gave up on a long generation -
- * and the next attempt usually lands. A timeout is different: it already spent the whole budget,
- * so trying again just spends it twice.
+ * Everything except a timeout. A timeout already spent the whole budget, so a second attempt
+ * spends it twice; anything else reaching this point is a connection that went away - a reset, a
+ * refused handshake, a TLS failure on a busy edge - and the next attempt usually lands. A 4xx or
+ * 5xx never gets here, because those are reported before the throw.
  */
 function isTransient(error: unknown): boolean {
-  return /ECONNRESET|ECONNREFUSED|EPIPE|socket connection was closed|fetch failed/i.test(String(error));
+  const text = String(error).toLowerCase();
+  return !text.includes("timeout") && !text.includes("abort");
 }
 
 async function systemOne(
