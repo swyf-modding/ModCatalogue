@@ -400,7 +400,9 @@ export async function reviewMod(
     if (!verdict) {
       return {
         verdict: "unsure",
-        reason: "the review did not produce a verdict, so the submission is held back for a person",
+        reason:
+          "The automated review did not finish, so a maintainer will take a look " +
+          "before this is listed.",
       };
     }
 
@@ -408,21 +410,26 @@ export async function reviewMod(
       return {
         verdict: "unsure",
         reason:
-          "the review could not read the mod's code - neither the release nor the source could be " +
-          "fetched - so it is held back for a person",
+          "The automated review could not read the mod's code, so a maintainer will " +
+          "take a look before this is listed.",
         read: [],
       };
     }
 
     return {
       verdict: verdict.verdict,
-      reason: verdict.reason || "no reason given",
+      reason: verdict.reason || "The review did not give a reason.",
       read: verdict.read,
     };
   } catch (error) {
+    // The message is read by a submitter, so it says what happens next rather
+    // than what the service tripped over; the detail is in the log.
+    console.error(`review failed: ${String(error)}`);
     return {
       verdict: "unsure",
-      reason: `the review could not be run: ${(error as Error).message}`,
+      reason:
+        "The automated review could not be completed, so a maintainer will take a " +
+        "look before this is listed.",
     };
   } finally {
     if (workDir) await rm(workDir, { recursive: true, force: true }).catch(() => undefined);

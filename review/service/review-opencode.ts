@@ -389,7 +389,7 @@ function yesProbability(answer: any): number | undefined {
   return undefined;
 }
 
-interface Triage {
+export interface Triage {
   ok: boolean;
   tier: Tier;
   chosen?: Verdict;
@@ -549,7 +549,7 @@ function priority(file: SourceFile): number {
 
 // ------------------------------------------------- Stage 2: stronger reviewer
 
-interface Decision {
+export interface Decision {
   verdict: Verdict;
   reason: string;
   model: string;
@@ -731,6 +731,74 @@ async function decide(
 
 // -------------------------------------------------------------------- main
 
+/**
+ * Turn the reviewer's answer into the message a person reads.
+ *
+ * The message appears on the pull request that lists the mod, and in the
+ * answer the service gives for a submission that was held back. So it says
+ * what the code did and what happens next, in plain words. The models that
+ * ran, and the first pass's scores, are not repeated here: they are in the
+ * container log, where whoever runs the service can find them.
+ *
+ * Being unsure is the safe answer, so an `ok` that was only reached with part
+ * of the code, or that the first pass strongly doubted, becomes unsure; and a
+ * `refuse` the first pass did not expect is left to a person too.
+ */
+export function composeVerdict(input: {
+  decision: Decision | null;
+  triage: Triage;
+  incompleteReasons: string[];
+  coverage: string;
+}): { verdict: Verdict; reason: string } {
+  const { decision, triage, incompleteReasons, coverage } = input;
+
+  if (!decision) {
+    return {
+      verdict: "unsure",
+      reason:
+        "The automated review could not be completed, so a maintainer will take a " +
+        `look before this is listed. ${coverage}`,
+    };
+  }
+
+  let verdict = decision.verdict;
+  const notes: string[] = [];
+
+  if (verdict === "ok" && incompleteReasons.length > 0) {
+    verdict = "unsure";
+    notes.push(
+      `Not everything could be checked automatically: ${incompleteReasons.join(" and ")}.`,
+    );
+  }
+  if (verdict === "ok" && triage.tier === "high") {
+    verdict = "unsure";
+    notes.push("The code raised questions that need a person to settle.");
+  }
+  if (verdict === "refuse" && triage.tier === "low") {
+    verdict = "unsure";
+    notes.push("The answer was not clear-cut, so it needs a person to decide.");
+  }
+
+  const outcome =
+    verdict === "ok"
+      ? "It is ready to be listed."
+      : verdict === "refuse"
+        ? "It was not listed."
+        : "A maintainer will take a look before it is listed.";
+
+  const reason = [
+    decision.reason || "The review did not give a reason.",
+    outcome,
+    ...notes,
+    coverage,
+  ]
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return { verdict, reason };
+}
+
 async function main(): Promise<void> {
   const workDir = process.argv[2];
   if (!workDir) {
@@ -777,10 +845,21 @@ async function main(): Promise<void> {
 
   const hiddenRisk = packed.omitted.filter((f) => priority(f) >= RELEVANT_THRESHOLD);
   const incompleteReasons: string[] = [];
-  if (skipped.length > 0) incompleteReasons.push(`${skipped.length} files skipped as unreadable or too large`);
-  if (packed.truncated.length > 0) incompleteReasons.push(`${packed.truncated.length} files truncated`);
-  if (hiddenRisk.length > 0) incompleteReasons.push(`${hiddenRisk.length} relevant files did not fit`);
-  const incomplete = incompleteReasons.length > 0;
+  if (skipped.length > 0) {
+    incompleteReasons.push(
+      `${skipped.length} source ${skipped.length === 1 ? "file" : "files"} could not be read`,
+    );
+  }
+  if (packed.truncated.length > 0) {
+    incompleteReasons.push(
+      `${packed.truncated.length} ${packed.truncated.length === 1 ? "file was" : "files were"} only partly read`,
+    );
+  }
+  if (hiddenRisk.length > 0) {
+    incompleteReasons.push(
+      `${hiddenRisk.length} relevant ${hiddenRisk.length === 1 ? "file did" : "files did"} not fit`,
+    );
+  }
 
   const notShown = [...skipped, ...packed.omitted.map((f) => f.path)];
 
@@ -831,39 +910,30 @@ async function main(): Promise<void> {
   const triageNote = triage.ok
     ? `triage ${triage.tier}${triage.flagged.length > 0 ? ": " + triage.flagged.join("; ") : ""}`
     : "triage unavailable";
-  const coverage = `${packed.included.length} of ${files.length + skipped.length} source files shown`;
+  const totalFiles = files.length + skipped.length;
+  const coverage =
+    totalFiles === 0
+      ? "No source files were available to read."
+      : packed.included.length >= totalFiles
+        ? `All ${totalFiles} source ${totalFiles === 1 ? "file was" : "files were"} read.`
+        : `${packed.included.length} of ${totalFiles} source files were read.`;
 
-  let verdict: Verdict;
-  let reason: string;
+  // The model and the screening pass stay in the log: they are for whoever runs
+  // the service, and a submitter reading the reason should not need them.
+  console.error(
+    `review: ${decision ? `${decision.verdict} from ${decision.model}` : "no decision"}` +
+      `; ${triageNote}; ${coverage}` +
+      (decision?.reason ? ` - ${decision.reason}` : ""),
+  );
 
-  if (!decision) {
-    verdict = "unsure";
-    reason =
-      `The full review could not run (every reviewer model failed or timed out), so this is held for a person. [${triageNote}; ${coverage}]`;
-  } else {
-    verdict = decision.verdict;
-    const notes: string[] = [];
-
-    if (verdict === "ok" && incomplete) {
-      verdict = "unsure";
-      notes.push(`downgraded to unsure, review incomplete: ${incompleteReasons.join(", ")}`);
-    }
-    // Strong disagreement between the reviewer and the triage goes to a person.
-    if (verdict === "ok" && triage.tier === "high") {
-      verdict = "unsure";
-      notes.push("downgraded to unsure, reviewer said ok but triage was high");
-    }
-    if (verdict === "refuse" && triage.tier === "low") {
-      verdict = "unsure";
-      notes.push("downgraded to unsure, reviewer said refuse but triage was low");
-    }
-
-    reason =
-      `${decision.reason || "No reason given."} ` +
-      `[${decision.model}; ${triageNote}; ${coverage}${notes.length > 0 ? "; " + notes.join("; ") : ""}]`;
-  }
-
-  reason = clean(reason).replace(/\s+/g, " ").trim().slice(0, 900);
+  const combined = composeVerdict({
+    decision,
+    triage,
+    incompleteReasons,
+    coverage,
+  });
+  const verdict = combined.verdict;
+  const reason = clean(combined.reason).replace(/\s+/g, " ").trim().slice(0, 900);
 
   // FLAT object only: strings and an array of strings, nothing nested.
   await writeFile(
@@ -883,7 +953,9 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

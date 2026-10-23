@@ -83,8 +83,13 @@ show.
 working directory and has to leave a `verdict.json` in it:
 
 ```json
-{ "verdict": "ok", "reason": "one sentence", "read": ["the files it read"] }
+{ "verdict": "ok", "reason": "a short message for the submitter", "read": ["the files it read"] }
 ```
+
+`reason` is what a person reads: on the pull request for a mod that is
+listed, and in the answer for one that is held back. It is written to be
+understood without the service around it, so it says what the code does and
+what happens next, and it never names the models that ran.
 
 The default is `review-opencode.ts`, which sends the prompt and the facts to
 Jev via [OpenCode's Zen API](https://opencode.ai/v2/docs/api)

@@ -127,11 +127,28 @@ jobs:
           if (-not $result) { throw 'The review did not finish.' }
 
           $verdict = $result.results | Select-Object -First 1
-          Write-Host "verdict: $($verdict.verdict) - $($verdict.reason)"
-          Set-Content -LiteralPath ./out/review.md -Value "**$($verdict.verdict)** - $($verdict.reason)"
+          $headline = switch ($verdict.verdict) {
+            'ok' { 'Ready to list' }
+            'unsure' { 'Needs a look from a maintainer' }
+            'refuse' { 'Not listed' }
+            default { 'Reviewed' }
+          }
+          Write-Host "review: $headline - $($verdict.reason)"
+
+          # The message is for the submitter as much as the maintainer: a plain
+          # heading, then what the code does and what happens next. The raw
+          # verdict words and the models behind them are not shown.
+          $review = @(
+            "**$headline**"
+            ""
+            $verdict.reason
+            ""
+            "<sub>Automated review of the code. A maintainer makes the final decision.</sub>"
+          ) -join "`n"
+          Set-Content -LiteralPath ./out/review.md -Value $review
 
           if ($verdict.verdict -ne 'ok') {
-            throw "The review held this one back: $($verdict.reason). Nothing was listed."
+            throw "The submission was not listed. $($verdict.reason)"
           }
 
       - name: Open the pull request
