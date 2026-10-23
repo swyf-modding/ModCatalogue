@@ -144,24 +144,31 @@ sh tools/try-review.sh swyf-modding AI-Backend v1.2.1 http://127.0.0.1:8080
 
 A test that fails there is the service's problem, not the workflow's.
 
-### When the CLI is the problem
+### The free tier cannot review a mod
 
-The default is `SMART_MODE=cli`: it runs the real `opencode` binary with a private empty `HOME`,
-because that is how the free models are meant to be used. That empty `HOME` is also why it has
-**no stored login** — so a CLI that starts, resolves the model and then sits there is usually
-waiting for a credential it does not have, not out of memory or out of CPU.
+OpenCode's free models answer only a logged-in app:
 
-The HTTP path uses the same API key the triage already used successfully, and needs no login:
+```text
+403 FreeTierError: OpenCode's free tier can only be used from within OpenCode.
+```
+
+A container is not the app. `SMART_MODE=cli` runs the real binary with a private empty `HOME`, so
+it has no login; `SMART_MODE=http` sends the same request to the API and gets the same refusal
+because the model is a free one. Either way the verdict comes back `unsure` with that message,
+which is the honest answer.
+
+The reviewer therefore needs a **paid model**, and the image defaults to the API for that reason:
 
 ```sh
 docker run -d --name swyf-review -p 8080:8080 \
   -e SMART_MODE=http \
-  -e OPENCODE_API_KEY=<the same key> \
+  -e OPENCODE_API_KEY=<a key with credit> \
   swyf-review
 ```
 
-`SMART_MODELS` chooses the models in both modes; in `http` mode they are the provider's own
-names, without the `opencode/` prefix.
+`SMART_MODELS` defaults to `deepseek-v4.1-flash,glm-5.3-flash` in that mode — a bare name, no
+`opencode/` prefix. Jev's triage is free and works with the same key, which is why a run can
+report useful triage and still fail the review: the two stages bill differently.
 
 ## The GitHub token
 

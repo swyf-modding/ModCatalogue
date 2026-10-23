@@ -15,9 +15,14 @@
 #
 # The agent itself is a separate, swappable command. REVIEW_COMMAND decides
 # what actually does the reviewing; the default is a two-stage review:
-# Jev (OpenCode's System One API) does the triage, and a stronger model,
-# run through the real opencode CLI with every tool switched off, makes the
-# decision. Swapping in something else is one variable.
+# Jev (OpenCode's System One API) does the triage, and a stronger model makes
+# the decision over the OpenCode API with the API key. Swapping in something
+# else is one variable.
+#
+# SMART_MODE=cli runs the opencode binary instead, with every tool switched
+# off - but OpenCode's free tier only answers a logged-in app, and a container
+# has no login, so that mode needs a paid profile or a paid model. The default
+# is the API for that reason.
 #
 # Bun runs the service: it runs TypeScript with no build step, so the image
 # can be built from the checkout as it is.
@@ -68,7 +73,7 @@ USER review
 ENV PORT=8080 \
     REVIEW_COMMAND=/app/service/review-opencode.ts \
     REVIEW_MODEL=jev-1.13-free \
-    SMART_MODE=cli \
+    SMART_MODE=http \
     MAX_MODS_PER_REQUEST=32
 
 EXPOSE 8080
