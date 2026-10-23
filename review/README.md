@@ -147,9 +147,11 @@ A test that fails there is the service's problem, not the workflow's.
 ### When the CLI is the problem
 
 The default is `SMART_MODE=cli`: it runs the real `opencode` binary with a private empty `HOME`,
-because that is how the free models are meant to be used. That also means it has no stored
-credentials, and free model ids change. If the log shows the CLI failing for every model, the
-HTTP path uses the same API key Jev just used, which is a good test of whether the key is fine:
+because that is how the free models are meant to be used. That empty `HOME` is also why it has
+**no stored login** — so a CLI that starts, resolves the model and then sits there is usually
+waiting for a credential it does not have, not out of memory or out of CPU.
+
+The HTTP path uses the same API key the triage already used successfully, and needs no login:
 
 ```sh
 docker run -d --name swyf-review -p 8080:8080 \

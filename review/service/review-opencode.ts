@@ -865,8 +865,14 @@ async function main(): Promise<void> {
   if (!decision) {
     verdict = "unsure";
     const last = MODEL_FAILURES.length > 0 ? ` Last error: ${MODEL_FAILURES[MODEL_FAILURES.length - 1]}.` : "";
+    // The CLI runs with a private, empty HOME, which is the point of the sandbox and also why it
+    // has no stored login. When that is what failed, saying so saves a lot of looking.
+    const hint =
+      SMART_MODE === "cli"
+        ? " If no model started at all, the CLI has no login in its sandbox: SMART_MODE=http uses the API key instead."
+        : "";
     reason =
-      `The full review could not run (every reviewer model failed or timed out), so this is held for a person.${last} ` +
+      `The full review could not run (every reviewer model failed or timed out), so this is held for a person.${last}${hint} ` +
       `[${triageNote}; ${coverage}]`;
   } else {
     verdict = decision.verdict;
