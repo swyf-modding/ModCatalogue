@@ -354,6 +354,17 @@ function jevUrl(baseUrl: string): string {
   return process.env.JEV_URL ?? `${baseUrl}/zen/v1/systemone`;
 }
 
+/**
+ * A connection that went away, as opposed to one that was told no.
+ *
+ * The API drops a request now and then - a reset, or a proxy that gave up on a long generation -
+ * and the next attempt usually lands. A timeout is different: it already spent the whole budget,
+ * so trying again just spends it twice.
+ */
+function isTransient(error: unknown): boolean {
+  return /ECONNRESET|ECONNREFUSED|EPIPE|socket connection was closed|fetch failed/i.test(String(error));
+}
+
 async function systemOne(
   baseUrl: string,
   apiKey: string,
@@ -362,20 +373,35 @@ async function systemOne(
   questions: Record<string, unknown>,
   timeoutMs: number,
 ): Promise<any> {
-  const response = await fetch(jevUrl(baseUrl), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ model, state, questions }),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`OpenCode API error ${response.status}: ${text}`);
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch(jevUrl(baseUrl), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ model, state, questions }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`OpenCode API error ${response.status}: ${text}`);
+      }
+      return await response.json();
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0 && isTransient(error)) {
+        console.error(`triage: ${String(error)}; trying again once`);
+        continue;
+      }
+      throw error;
+    }
   }
-  return response.json();
+
+  throw lastError;
 }
 
 // `answers` is an object keyed by question id (an array form is handled too).
@@ -732,46 +758,59 @@ async function decide(
   const url = reviewerUrl(baseUrl);
 
   for (const model of SMART_MODELS) {
-    const started = Date.now();
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.SMART_API_KEY ?? apiKey}`,
-          // OpenCode asks a client to name itself rather than arrive as a bare HTTP library, and
-          // to hold one session per conversation for routing and prompt caching.
-          "User-Agent": "swyf-modding-review/1.0",
-          ...(url.includes("opencode.ai") ? { "x-opencode-session": SESSION_ID } : {}),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: 800,
-          temperature: 0.1,
-          messages: [
-            { role: "system", content: system },
-            { role: "user", content: user },
-          ],
-        }),
-        signal: AbortSignal.timeout(SMART_TIMEOUT_MS),
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        failed(model, `${res.status} ${body.slice(0, 200)}`);
-        continue;
+    let decided: Decision | null = null;
+
+    for (let attempt = 0; attempt < 2 && !decided; attempt++) {
+      const started = Date.now();
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.SMART_API_KEY ?? apiKey}`,
+            // OpenCode asks a client to name itself rather than arrive as a bare HTTP library, and
+            // to hold one session per conversation for routing and prompt caching.
+            "User-Agent": "swyf-modding-review/1.0",
+            ...(url.includes("opencode.ai") ? { "x-opencode-session": SESSION_ID } : {}),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 800,
+            temperature: 0.1,
+            messages: [
+              { role: "system", content: system },
+              { role: "user", content: user },
+            ],
+          }),
+          signal: AbortSignal.timeout(SMART_TIMEOUT_MS),
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          failed(model, `${res.status} ${body.slice(0, 200)}`);
+          break;
+        }
+        const json: any = await res.json();
+        const content = json?.choices?.[0]?.message?.content;
+        const parsed = typeof content === "string" ? extractVerdict(content) : null;
+        if (!parsed) {
+          failed(model, "no usable verdict in the reply");
+          break;
+        }
+        decided = { verdict: parsed.verdict, reason: parsed.reason, model };
+      } catch (error) {
+        // Seconds, because "timed out" and "timed out after eleven of them" are different problems.
+        const seconds = Math.round((Date.now() - started) / 1000);
+
+        if (attempt === 0 && isTransient(error)) {
+          console.error(`reviewer ${model}: ${String(error)} after ${seconds}s; trying again once`);
+          continue;
+        }
+
+        failed(model, `${String(error)} after ${seconds}s`);
       }
-      const json: any = await res.json();
-      const content = json?.choices?.[0]?.message?.content;
-      const parsed = typeof content === "string" ? extractVerdict(content) : null;
-      if (!parsed) {
-        failed(model, "no usable verdict in the reply");
-        continue;
-      }
-      return { verdict: parsed.verdict, reason: parsed.reason, model };
-    } catch (error) {
-      // Seconds, because "timed out" and "timed out after eleven of them" are different problems.
-      failed(model, `${String(error)} after ${Math.round((Date.now() - started) / 1000)}s`);
     }
+
+    if (decided) return decided;
   }
   return null;
 }
