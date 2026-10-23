@@ -1,0 +1,303 @@
+name: Check a submission
+
+# One submission, checked and reported on its issue. Called by the two thin triggers - a new
+# issue, and a maintainer's command - so the pipeline exists once.
+#
+# What it does, in order:
+#   - runs the checks, which download the release and read the code;
+#   - asks the review service, when there is one;
+#   - writes everything it found into one comment on the issue, editing the previous one rather
+#     than adding to a pile;
+#   - opens the pull request itself when the checks pass and the review agrees, and otherwise
+#     leaves it for a maintainer to ask for.
+
+on:
+  workflow_call:
+    inputs:
+      issue:
+        description: 'The submission issue number.'
+        required: true
+        type: string
+      mode:
+        description: 'auto, recheck, create-pr or force.'
+        required: false
+        type: string
+        default: 'auto'
+      actor:
+        description: 'Who asked, when a person did.'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      BOT_APP_PRIVATE_KEY:
+        required: true
+      BOT_READ_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      ISSUE: ${{ inputs.issue }}
+      MODE: ${{ inputs.mode }}
+      ASKED_BY: ${{ inputs.actor }}
+      REVIEW_URL: ${{ vars.REVIEW_URL }}
+    steps:
+      - name: Sign in as the bot
+        id: bot
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.bot.outputs.token }}
+
+      - name: Read the submission
+        id: submission
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path ./out | Out-Null
+
+          $issue = gh api "repos/$($env:GITHUB_REPOSITORY)/issues/$($env:ISSUE)"
+          $submission = $issue | ConvertFrom-Json
+          if ($submission.body -notmatch 'swyf-modding-submission') {
+            throw 'This issue is not a submission: it does not carry the marker the site writes.'
+          }
+
+          Set-Content -LiteralPath ./submission.md -Value $submission.body -NoNewline
+
+          # The repository out of the title, which is "Mod submission: <repo>". A manual dispatch
+          # has no title to take it from, so the body is used instead.
+          $repo = if ($submission.title -like 'Mod submission:*') { $submission.title -replace '^Mod submission:\s*', '' }
+          if (-not $repo) {
+            $fenced = [regex]::Match($submission.body, '(?s)```json\s*(.*?)\s*```')
+            if ($fenced.Success) {
+              try { $repo = ($fenced.Groups[1].Value | ConvertFrom-Json).repo } catch { $repo = $null }
+            }
+          }
+          'repo=' + $repo >> $env:GITHUB_OUTPUT
+
+      # The mod is usually somebody else's repository, and an installation token can only see the
+      # app's own. A token with no scopes reads any public repository and raises the API limit from
+      # 60 an hour to 5000; without it this still works, just slower.
+      - name: Check the release and read the code
+        id: check
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.BOT_READ_TOKEN }}
+        run: |
+          $ok = $true
+          try {
+            ./tools/submission.ps1 -BodyFile ./submission.md -OutDir ./out *>&1 |
+              Tee-Object -FilePath ./out/log.txt
+          }
+          catch {
+            $ok = $false
+            ($_ | Out-String) | Add-Content -Path ./out/log.txt
+          }
+
+          'ok=' + $ok.ToString().ToLowerInvariant() >> $env:GITHUB_OUTPUT
+
+      - name: Review the submission
+        id: review
+        if: steps.check.outputs.ok == 'true' && vars.REVIEW_URL != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.BOT_READ_TOKEN }}
+        run: |
+          $catalogue = Get-Content -Raw ./out/mods.json | ConvertFrom-Json
+          $mod = $catalogue.mods | Where-Object { $_.repo -eq '${{ steps.submission.outputs.repo }}' } | Select-Object -First 1
+          if (-not $mod) { throw 'The entry is not in the new catalogue; nothing to review.' }
+
+          $body = @{
+            mods = @(@{
+              owner       = $mod.owner
+              repo        = $mod.repo
+              release     = $mod.approvedVersion
+              displayName = $mod.displayName
+              summary     = $mod.summary
+              files       = @($mod.files | ForEach-Object {
+                @{ fileName = $_.fileName; sha256 = $_.sha256; capabilities = @($_.capabilities); bepInPlugin = @($_.bepInPlugin) }
+              })
+            })
+          } | ConvertTo-Json -Depth 8
+
+          $headers = @{}
+          if ($env:GH_TOKEN) { $headers['x-github-token'] = $env:GH_TOKEN }
+
+          $response = Invoke-RestMethod -Uri "$env:REVIEW_URL/review" -Method Post -ContentType 'application/json' -Headers $headers -Body $body
+          if (-not $response.id) { throw 'The review service did not return a job id.' }
+
+          # A review takes as long as a model takes, so the answer is fetched rather than waited for.
+          $result = $null
+          for ($i = 0; $i -lt 120; $i++) {
+            Start-Sleep -Seconds 10
+            $poll = Invoke-RestMethod -Uri "$env:REVIEW_URL/result?id=$($response.id)" -Headers $headers
+            if (-not $poll.pending) { $result = $poll; break }
+          }
+          if (-not $result) { throw 'The review did not finish.' }
+
+          $result | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath ./out/review.json
+          Write-Host "verdict: $($result.results[0].verdict) - $($result.results[0].reason)"
+
+      # The comment is the record: everything the run found, in one place, edited rather than
+      # repeated. The labels are the state, so the issue list says which submissions are waiting.
+      - name: Report on the issue
+        id: report
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+        run: |
+          $ok = '${{ steps.check.outputs.ok }}' -eq 'true'
+          $splat = @{
+            OutFile    = './out/comment.md'
+            LabelsFile = './out/labels.txt'
+          }
+          if ($ok) {
+            $splat.Report = './out/submission-report.md'
+            if (Test-Path ./out/review.json) { $splat.Review = './out/review.json' }
+          }
+          else {
+            $splat.Failure = './out/log.txt'
+          }
+
+          ./tools/issue-comment.ps1 @splat
+
+          $body = Get-Content -Raw ./out/comment.md
+          if ($env:ASKED_BY) {
+            $body = $body.TrimEnd() + "`n`n<sub>Requested by @$($env:ASKED_BY).</sub>`n"
+          }
+
+          $comments = gh api "repos/$($env:GITHUB_REPOSITORY)/issues/$($env:ISSUE)/comments?per_page=100" | ConvertFrom-Json
+          $mine = $comments | Where-Object { $_.body -like '<!-- swyf-modding-check -->*' } | Select-Object -First 1
+
+          Set-Content -LiteralPath ./out/comment-body.md -Value $body -NoNewline
+          if ($mine) {
+            gh api -X PATCH "repos/$($env:GITHUB_REPOSITORY)/issues/comments/$($mine.id)" -F body=@./out/comment-body.md | Out-Null
+            Write-Host 'Updated the existing check comment.'
+          }
+          else {
+            gh issue comment $env:ISSUE --body-file ./out/comment-body.md | Out-Null
+            Write-Host 'Posted the check comment.'
+          }
+
+          # Labels: the state of this submission, at a glance in the issue list.
+          $wanted = @(Get-Content ./out/labels.txt | Where-Object { $_ })
+          $current = @((gh issue view $env:ISSUE --json labels --jq '.labels[].name') | Where-Object { $_ })
+
+          foreach ($label in $wanted) {
+            gh label create $label --force 2>$null | Out-Null
+            if ($current -notcontains $label) { gh issue edit $env:ISSUE --add-label $label | Out-Null }
+          }
+          foreach ($label in $current) {
+            if ($label -like 'review: *' -and $wanted -notcontains $label) {
+              gh issue edit $env:ISSUE --remove-label $label | Out-Null
+            }
+          }
+
+          $verdict = if (Test-Path ./out/review.json) { (Get-Content -Raw ./out/review.json | ConvertFrom-Json).results[0].verdict } else { 'none' }
+          'verdict=' + $verdict >> $env:GITHUB_OUTPUT
+
+      # When it is all good, the pull request is opened without anyone being asked. When it is not,
+      # the comment says what is wrong and a maintainer decides with a command.
+      - name: Decide
+        id: decide
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+        run: |
+          $ok = '${{ steps.check.outputs.ok }}' -eq 'true'
+          $verdict = '${{ steps.report.outputs.verdict }}'
+          $good = $verdict -eq 'ok' -or $verdict -eq 'none'
+          $mode = $env:MODE
+
+          $open = gh pr list --head "submission/issue-$env:ISSUE" --state open --json number --jq '.[0].number'
+          $already = -not [string]::IsNullOrWhiteSpace($open)
+
+          # A recheck is the same rule as a first submission: if it is all good now, it is opened
+          # now - including when an earlier run held it back.
+          $publish = switch ($mode) {
+            'auto'      { $ok -and $good }
+            'recheck'   { $ok -and $good }
+            'create-pr' { $ok -and $verdict -ne 'refuse' }
+            'force'     { $ok }
+            default     { $false }
+          }
+
+          Write-Host "mode=$mode ok=$ok verdict=$verdict already=$already publish=$publish"
+          'publish=' + ([bool]$publish).ToString().ToLowerInvariant() >> $env:GITHUB_OUTPUT
+
+      - name: Open or update the pull request
+        if: steps.decide.outputs.publish == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          BOT_SLUG: ${{ steps.bot.outputs.app-slug }}
+        run: |
+          $branch = "submission/issue-$env:ISSUE"
+          $subject = gh api "repos/$($env:GITHUB_REPOSITORY)/issues/$($env:ISSUE)" --jq .title
+          $found = gh pr list --head $branch --state all --json number,state --jq '.[0] | "\(.number) \(.state)"'
+          $number = ($found -split ' ')[0]
+          $state = ($found -split ' ')[1]
+
+          $name = if ($env:BOT_SLUG) { "$($env:BOT_SLUG)[bot]" } else { 'swyf-modding-bot' }
+          $email = if ($env:BOT_SLUG) { "$($env:BOT_SLUG)[bot]@users.noreply.github.com" } else { 'bot@swyf-modding.invalid' }
+          git config user.name $name
+          git config user.email $email
+
+          git checkout -B $branch
+          Copy-Item ./out/mods.json ./mods.json -Force
+          git add mods.json
+
+          if (git status --porcelain) {
+            git commit -m "Add a mod from a submission: $subject"
+            # One branch per issue, and the bot is the only thing that writes it.
+            git push -u origin $branch --force
+          }
+          else {
+            Write-Host 'The catalogue already says exactly this.'
+          }
+
+          $report = Get-Content -Raw ./out/submission-report.md
+          $review = ''
+          if (Test-Path ./out/review.json) {
+            $result = (Get-Content -Raw ./out/review.json | ConvertFrom-Json).results[0]
+            $review = "`n### Review`n`n**$($result.verdict)** - $($result.reason)"
+          }
+
+          $body = @"
+          A mod submission, processed automatically.
+
+          The entry was filled in and checked by the website, the release was downloaded and read,
+          and the file hashes and capabilities in it come from the code itself.
+
+          $report
+          $review
+          "@
+
+          Set-Content -LiteralPath ./out/pr-body.md -Value $body -NoNewline
+
+          if ($number) {
+            gh pr edit $number --body-file ./out/pr-body.md | Out-Null
+            if ($state -eq 'CLOSED') { gh pr reopen $number | Out-Null }
+            $url = gh pr view $number --json url --jq .url
+            Write-Host "Updated #$number."
+          }
+          else {
+            $url = gh pr create --title $subject --body-file ./out/pr-body.md --base main --head $branch
+          }
+
+          gh label create 'pr: opened' --force 2>$null | Out-Null
+          gh issue edit $env:ISSUE --add-label 'pr: opened' | Out-Null
+
+          Set-Content -LiteralPath ./out/comment-body.md -Value "The pull request is at $url." -NoNewline
+          gh api -X POST "repos/$($env:GITHUB_REPOSITORY)/issues/$($env:ISSUE)/comments" -F body=@./out/comment-body.md | Out-Null

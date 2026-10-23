@@ -120,9 +120,32 @@ What happens after you send it:
    library has to be routed to `core`, every plugin has to carry the `[BepInPlugin]` attribute the
    loader reads with a version the loader can parse, and every setup step has to name a script the
    release really holds. Half an entry is how a mod ends up installed with its library missing.
-3. **A pull request is opened** with the checked entry and the scan results, for a maintainer to
-   merge. The merge is still a person's: this is a list of code people install, and the step that
-   puts an entry in it is one somebody should be able to see and undo.
+3. **Everything found is written to the issue**, in one comment: the files with their hashes and
+   capabilities, the setup steps, and what the review made of it. A re-run edits that comment
+   rather than adding another.
+4. **If it all passes, a pull request is opened** with the checked entry, as the project's bot.
+   If anything does not pass, nothing is opened: the comment says what is wrong, and a maintainer
+   decides what happens next.
+
+The merge is still a person's. A catalogue is a list of code people install, and the step that
+puts an entry in it is one somebody should be able to see and undo.
+
+### For a maintainer
+
+The bot is a reviewer's tool: the checks and the review are information, and the commands are
+only answered for people with write access.
+
+| Comment on the issue | What it does |
+|---|---|
+| `/recheck` | runs the checks and the review again, edits the comment, and opens the pull request if it now passes |
+| `/create-pr` | opens the pull request anyway, when the review was unsure |
+| `/create-pr force` | opens it even though the review refused |
+
+`/recheck` is the useful one after an author publishes a fixed release: the entry re-pins to it,
+and a pull request that is already open is updated rather than duplicated.
+
+The issue also carries labels, so the list says what is waiting: `review: ok`, `review: unsure`,
+`review: refuse`, `review: failed`, and `pr: opened`.
 
 The listing can also be reviewed by a model, which reads the scan results and the entry and says
 whether the summary describes what the code does. It is not a safety verdict and does not pretend to
