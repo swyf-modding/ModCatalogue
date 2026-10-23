@@ -16,6 +16,9 @@
           "capabilities": [
             "dynamic-code",
             "network"
+          ],
+          "bepInPlugin": [
+            "com.community.scamwyf.aibackend | Scam WYF AI Backend | 1.2.1"
           ]
         },
         {
@@ -47,6 +50,9 @@
             "dynamic-code",
             "environment",
             "filesystem-read"
+          ],
+          "bepInPlugin": [
+            "community.scamwithyourfriends.callerportraitimporter | Caller Portrait Importer | 0.2.1"
           ]
         }
       ]
@@ -68,6 +74,9 @@
             "filesystem-read",
             "filesystem-write",
             "network"
+          ],
+          "bepInPlugin": [
+            "com.bobby.chaosmode | Chaos Mode | 1.2.0"
           ]
         }
       ],
@@ -93,6 +102,9 @@
           "sha256": "6b162ee227b855222ab2dee09d2869027c1583d79df1461d695b97a08e3ef8b2",
           "capabilities": [
             "dynamic-code"
+          ],
+          "bepInPlugin": [
+            "com.proprogramer123.scamwyf.hostboss | HostBoss | 1.5.0"
           ]
         }
       ]
@@ -112,6 +124,9 @@
           "capabilities": [
             "filesystem-read",
             "filesystem-write"
+          ],
+          "bepInPlugin": [
+            "com.community.scamwyf.modhandler | Scam WYF Mod Handler | 1.0.4"
           ]
         },
         {
@@ -145,6 +160,9 @@
             "filesystem-read",
             "filesystem-write",
             "process"
+          ],
+          "bepInPlugin": [
+            "xofa.swyf.modmanager | Mod Manager | 0.1.0"
           ]
         }
       ]
@@ -163,6 +181,9 @@
           "sha256": "a5fe4cb9681495bd2905d0d97b969428af64c58fc4cf5931e81168ab8374f5a3",
           "capabilities": [
             "dynamic-code"
+          ],
+          "bepInPlugin": [
+            "codex.swat-on-quota-fail | SWAT on Quota Fail | 2.5.1"
           ]
         }
       ]

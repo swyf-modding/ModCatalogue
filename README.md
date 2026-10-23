@@ -7,6 +7,8 @@ a mod means editing that file — not cutting a Switchboard release. Merging her
 immediately, which is also why the file is validated strictly: anything unexpected rejects the
 whole file and Switchboard falls back to the list compiled into it, saying so on its status line.
 
+Setting it up — the app, the two services and the credentials — is in [SETUP.md](SETUP.md).
+
 ## The file
 
 One JSON object with a schema version and an array of mods:
@@ -43,9 +45,33 @@ One JSON object with a schema version and an array of mods:
 | `approvedVersion` | no | The release tag a reviewer actually looked at, e.g. `v1.5.0`. See **Pinning and capabilities** |
 | `files[].sha256` | no | SHA-256 of that file in the approved release, recorded at review time |
 | `files[].capabilities` | no | What that file can reach outside the game process, as reported by `tools/scan-capabilities.ps1` |
+| `files[].bepInPlugin` | no | What the file's `[BepInPlugin]` attribute says, as `guid \| name \| version`. Absent when the file is not a plugin |
 | `postInstall[].sha256` | no | SHA-256 of that setup script in the approved release. Required whenever `approvedVersion` is set |
 
 Keep entries alphabetical by repository name. At most 64 mods and 16 files per mod — caps, not targets.
+
+The file has one shape: two spaces, LF endings, no byte order mark, and the fields in the order
+above. `tools/catalogue-rules.ps1` writes it that way, so a change to the catalogue is a change
+to the catalogue and not to the formatting.
+
+### The rules are written down once
+
+`tools/catalogue-rules.ps1` holds the rules — the lengths, the names, the caps, what a pinned
+entry has to pin. The submission tool, the gate and the schema check all read them from there,
+so a rule in two places cannot end up disagreeing with itself.
+
+```powershell
+./tools/check-catalogue.ps1                # is mods.json a catalogue Switchboard will accept?
+./tools/check-catalogue.ps1 -Entry ./entry.json   # is this one entry a valid entry?
+./tools/test-catalogue.ps1                 # do the rules still do what they say they do?
+```
+
+The check is the shape of the file, and it costs nothing: no network, no release, no code. A
+catalogue with a problem in it is refused whole — Switchboard falls back to the list it was
+built with — so one bad entry unlists every mod rather than one.
+
+The test is for the rules themselves, which are the part of this repository that can be wrong
+without anybody noticing for weeks. It runs in CI and needs nothing but the repository.
 
 ### Optional setup steps
 
@@ -72,6 +98,10 @@ to skipping — denying everything leaves the install as it was. A declared scri
 contain fails the install rather than being fetched from anywhere else. Scripts receive the game
 folder as `-GameDir` and run with the download as their working directory.
 
+A setup step belongs to the mod, not to the submission: when a mod that already has one is submitted
+again, the step carries over rather than being quietly dropped. If the release no longer holds the
+script, the step is dropped and the submission says so.
+
 ## Getting your mod listed
 
 **Send it from the website.** The Submit page takes an owner, a repository and a release, and
@@ -85,10 +115,11 @@ What happens after you send it:
    and runs `tools/scan-capabilities.ps1` over it — the same scan `verify-catalogue.ps1` uses — so
    the entry records each file's hash and what it can reach. A capability that appears between two
    releases cannot pass unnoticed.
-2. **The entry is checked against the code.** Every file the entry names has to be in the release,
-   every assembly in the release has to be named by the entry, the shared library has to be routed
-   to `core`, and every plugin has to carry the `[BepInPlugin]` attribute the loader reads. Half an
-   entry is how a mod ends up installed with its library missing.
+2. **The entry is checked against the code.** Every file the entry names has to be in the release
+   and at the top of it, every assembly in the release has to be named by the entry, the shared
+   library has to be routed to `core`, every plugin has to carry the `[BepInPlugin]` attribute the
+   loader reads with a version the loader can parse, and every setup step has to name a script the
+   release really holds. Half an entry is how a mod ends up installed with its library missing.
 3. **A pull request is opened** with the checked entry and the scan results, for a maintainer to
    merge. The merge is still a person's: this is a list of code people install, and the step that
    puts an entry in it is one somebody should be able to see and undo.
@@ -104,14 +135,17 @@ the checks below still apply at install time:
 1. **A public GitHub repository with versioned releases.** Switchboard reads `releases/latest`,
    which ignores prereleases, so publish finished releases. Every release needs a downloadable
    `.zip` asset; a release with no zip cannot be installed from and is reported as such.
-2. **Plugin DLLs the loader will actually load.** Each one carries a `[BepInPlugin]` attribute
+2. **The files at the top of the zip.** Switchboard looks for `YourMod.dll` by name in the folder it
+   unpacked the download into, and nowhere else. A release that puts its dll in a folder inside the
+   zip installs a mod with a file missing, and the submission is refused rather than listed.
+3. **Plugin DLLs the loader will actually load.** Each one carries a `[BepInPlugin]` attribute
    whose version BepInEx can parse: two to four dot-separated numbers, no letters, no `+` or `-`.
    A SemVer build-metadata version (`1.2.3+g0a1b2c3`) is valid SemVer and unloadable by BepInEx —
    Switchboard flags it in the list rather than installing something that silently does nothing.
-3. **The shared library routed to `core`, if you ship one.** `ScamWYF.Modding.Core.dll` goes in
+4. **The shared library routed to `core`, if you ship one.** `ScamWYF.Modding.Core.dll` goes in
    `core` with `expectsPluginAttribute: false`. In `plugins` the chainloader would try to load it
    as a plugin and the install would break in a way nothing explains.
-4. **A display name and an honest summary.** Say what the mod does. The install confirmation shows
+5. **A display name and an honest summary.** Say what the mod does. The install confirmation shows
    the files, their versions read out of the binaries, and anything they would replace — there is
    no field here that overrides what is actually in the download.
 
@@ -127,11 +161,22 @@ exactly the same rules — the difference is only that the file names are typed 
 of the release, and that the hashes and capabilities have to be filled in by hand or by
 `tools/scan-capabilities.ps1`.
 
+Check the result before sending it:
+
+```powershell
+./tools/check-catalogue.ps1 -Entry ./my-entry.json
+```
+
 ## Pinning and capabilities
 
-Three optional fields record what was actually reviewed. They are **additive**: `schemaVersion`
-stays at `1`, Switchboard versions that predate them ignore them, and nothing about installing changes
-until a Switchboard version chooses to read them.
+Four optional fields record what was actually reviewed. They are **additive**: `schemaVersion`
+stays at `1`, and a Switchboard older than them ignores them and installs `releases/latest` as it
+always did.
+
+A Switchboard that does read them installs the release the entry names rather than the newest one,
+hashes every file as it unpacks it, and refuses the install if a hash does not match. The list says
+`yes` for a fully pinned entry and `no` for one that is not, so the difference between a reviewed
+release and a repository someone typed into a list is visible where a person is choosing.
 
 ```json
 {
@@ -142,7 +187,8 @@ until a Switchboard version chooses to read them.
       "folder": "plugins",
       "expectsPluginAttribute": true,
       "sha256": "491f4a169888b8a0e120aa304c15cc4964be68c627b208c8a0f59df4e5750385",
-      "capabilities": ["base64", "dynamic-code", "filesystem-read", "filesystem-write", "process"]
+      "capabilities": ["base64", "dynamic-code", "filesystem-read", "filesystem-write", "process"],
+      "bepInPlugin": ["xofa.swyf.modmanager | Mod Manager | 0.1.0"]
     }
   ]
 }
@@ -183,7 +229,10 @@ capability *appearing where it was not before* is impossible to miss.
 ### The gate
 
 `tools/verify-catalogue.ps1` downloads each pinned release, checks the hash, rescans, and fails
-if the bytes or the capabilities moved. CI runs it on every pull request and weekly.
+if the bytes or the capabilities moved. It also fails if the catalogue does not follow the rules,
+if a pinned file is not at the top of the download, if the shared library is routed wrongly, if a
+plugin's `[BepInPlugin]` attribute changed, or if a setup script changed. CI runs it on every pull
+request and weekly.
 
 The weekly run is the one that earns its keep: a git tag can be moved and a release asset can be
 replaced after the fact, so a pin that verified at merge time does not stay true by itself.
@@ -191,12 +240,22 @@ replaced after the fact, so a pin that verified at merge time does not stay true
 ```powershell
 ./tools/verify-catalogue.ps1              # the gate
 ./tools/verify-catalogue.ps1 -Update      # re-pin everything to current latest, then review the diff
+./tools/verify-catalogue.ps1 -Refresh     # re-read the pinned releases, keeping the pins
 ./tools/scan-capabilities.ps1 -Path x.dll -Detail
+./tools/check-catalogue.ps1               # is the file itself a valid catalogue?
 ./tools/submission.ps1 -Body $body        # check a submission and write the new catalogue
 ```
 
 When a mod publishes a new release the gate fails, which is intended: someone reads the diff and,
 if it is fine, re-pins. A capability change is a prompt to look, not an accusation.
+
+The gate keeps going when one mod cannot be reached. A release that GitHub will not answer for,
+or a download that stalls, is reported as unchecked rather than as fine — and the other mods are
+still checked, because one unreachable repository is not a reason to stop looking at the rest.
+
+`-Refresh` is for the other case: the pin is right, but the catalogue does not yet say everything
+the release says — a plugin that has since declared what it is, say. It reads the pinned releases
+again and rewrites what they record, without moving the pin to a different release.
 
 `tools/submission.ps1` is the other half: it is what the workflow runs when a submission arrives.
 It downloads the release, reads the code, checks the entry against both, and writes the new
@@ -205,7 +264,58 @@ writes, so a maintainer still merges it.
 
 ```powershell
 ./tools/submission.ps1 -Body (Get-Content -Raw submission.md) -OutDir ./out
+./tools/submission.ps1 -BodyFile ./submission.md -CheckOnly   # check it and write nothing
 ```
+
+## The bot
+
+Two things here act on GitHub without a person pressing anything: the website's
+submission service opens the submission issue, and the submission workflow opens the
+pull request. Both do it as a GitHub App, not as a personal access token.
+
+That is not a preference. A pull request opened with the workflow's own `GITHUB_TOKEN`
+does **not** trigger the workflows that would check it — GitHub suppresses events caused
+by that token — so the gate would never run on a submission. An app's installation token
+has no such restriction. It also expires within the hour, and it can do only what the app
+was granted, on the repository it is installed on, which is a better thing to have lying
+around than somebody's token with `repo` on it.
+
+One app is enough for both halves:
+
+| Permission | Why |
+|---|---|
+| Issues: read and write | The submission service opens the submission issue |
+| Contents: read and write | The workflow pushes the entry's branch |
+| Pull requests: read and write | The workflow opens and updates the pull request |
+
+It is installed on this repository only, and the workflow's token is scoped to this
+repository even though the installation may be wider.
+
+**Settings that make it work.** A repository variable `BOT_APP_CLIENT_ID` (the app's
+client id, safe to keep in plain sight) and a repository secret `BOT_APP_PRIVATE_KEY`
+(the `.pem` GitHub gave you once). The service that opens the issue uses the same app;
+its configuration is in `website/worker/README.md`.
+
+### Reading other people's repositories
+
+The app cannot see them. An installation token is scoped to the repositories the app is
+installed on, and the mod being submitted is usually not one of them — so the two steps
+that read it, the scan and the review, take a different credential: a repository secret
+`BOT_READ_TOKEN`.
+
+A classic token with **no scopes ticked** is enough. It writes nothing; public read needs
+no permission, and its only other job is to raise the API limit from 60 requests an hour
+to 5000. A fine-grained token with no repository access works too.
+
+Without it those steps run unauthenticated, which works and is slower — an hour with
+more than about thirty submissions in it would hit the limit. The app's token is
+deliberately **not** used as a fallback: it would be refused by a repository it does not
+know, and the failure reads as a missing release rather than as a missing permission.
+
+So the split is: **the app writes** (issues, commits, pull requests) and **the read token
+reads** (releases, source, the catalogue). The writes are the ones that need a durable
+identity and an audit trail; the reads are the bulk of the requests, and they are the
+part a public read token can do.
 
 ## Trust
 
