@@ -598,9 +598,11 @@ interface Decision {
 const MODEL_FAILURES: string[] = [];
 
 function failed(model: string, why: string): void {
-  const line = `${model}: ${why}`.replace(/\s+/g, " ").trim();
+  // The log names the model; the verdict does not. What a maintainer reads in the issue is about
+  // the submission, and which model was tried is a detail for whoever runs the service.
+  const line = why.replace(/\s+/g, " ").trim();
   MODEL_FAILURES.push(line);
-  console.error(`reviewer ${line}`);
+  console.error(`reviewer ${model}: ${line}`);
 }
 
 /** Same flat-object extraction the service uses, so both agree on what an answer is. */
@@ -1023,23 +1025,22 @@ async function main(): Promise<void> {
   const triageNote = triage.ok
     ? `triage ${triage.tier}${triage.flagged.length > 0 ? ": " + triage.flagged.join("; ") : ""}`
     : "triage unavailable";
-  const coverage = `${packed.included.length} of ${files.length + skipped.length} source files shown`;
+  const read = `${packed.included.length} of ${files.length + skipped.length}`;
+  const coverage =
+    packed.included.length === files.length + skipped.length
+      ? `read all ${files.length + skipped.length} source files`
+      : `read ${read} source files`;
 
   let verdict: Verdict;
   let reason: string;
 
   if (!decision) {
     verdict = "unsure";
-    const last = MODEL_FAILURES.length > 0 ? ` Last error: ${MODEL_FAILURES[MODEL_FAILURES.length - 1]}.` : "";
-    // The CLI runs with a private, empty HOME, which is the point of the sandbox and also why it
-    // has no stored login. When that is what failed, saying so saves a lot of looking.
-    const hint =
-      SMART_MODE === "cli"
-        ? " If no model started at all, the CLI has no login in its sandbox: SMART_MODE=http uses the API key instead."
-        : "";
-    reason =
-      `The full review could not run (every reviewer model failed or timed out), so this is held for a person.${last}${hint} ` +
-      `[${triageNote}; ${coverage}]`;
+    const last = MODEL_FAILURES.length > 0 ? ` (last error: ${MODEL_FAILURES[MODEL_FAILURES.length - 1]})` : "";
+    // What the issue says: that a person is needed. Why the model failed, and what to configure,
+    // is for the service log - the submission did nothing wrong.
+    reason = `The review could not run, so this is held for a person.${last}`;
+    console.error(`review: no verdict [${triageNote}; ${read} files; ${MODEL_FAILURES.length} attempt(s)]`);
   } else {
     verdict = decision.verdict;
     const notes: string[] = [];
@@ -1058,9 +1059,16 @@ async function main(): Promise<void> {
       notes.push("downgraded to unsure, reviewer said refuse but triage was low");
     }
 
+    console.error(
+      `review: ${decision.model} said ${decision.verdict}, published as ${verdict} ` +
+        `[${triageNote}; ${read} files${notes.length > 0 ? "; " + notes.join("; ") : ""}]`,
+    );
+
+    // The sentence is what a person reads. The model, the triage scores and the downgrade rules
+    // are how the sentence was arrived at, and they belong in the log rather than in the issue.
+    const held = verdict !== decision.verdict;
     reason =
-      `${decision.reason || "No reason given."} ` +
-      `[${decision.model}; ${triageNote}; ${coverage}${notes.length > 0 ? "; " + notes.join("; ") : ""}]`;
+      `${decision.reason || "No reason given."} (${coverage}${held ? "; held for a person" : ""})`;
   }
 
   reason = clean(reason).replace(/\s+/g, " ").trim().slice(0, 900);
