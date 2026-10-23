@@ -208,4 +208,9 @@ const server = Bun.serve({
   },
 });
 
-console.log(`the review service is listening on ${server.port}`);
+console.log(
+  `the review service is listening on ${server.port} ` +
+    `(reviewer ${(process.env.SMART_MODE ?? "http").toLowerCase()}, ` +
+    `models ${process.env.SMART_MODELS ?? "the defaults"}, ` +
+    `key ${process.env.OPENCODE_API_KEY ? "set" : "MISSING"})`,
+);
