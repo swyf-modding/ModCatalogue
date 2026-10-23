@@ -176,9 +176,14 @@ models this client can use is the ones Go serves over `openai/v1/chat/completion
 Kimi, DeepSeek, MiMo, MiniMax, Hy and Beam families. Qwen, Claude, GPT and Grok are served over
 Anthropic's or OpenAI's *Responses* shape, which this client does not speak.
 
-Leave `SMART_URL` unset and the reviewer asks the free-tier endpoint, which is only useful with a
-logged-in app. The same key's Jev triage (`REVIEW_MODEL`) is free and works either way, which is
-why a run can report useful triage and still fail the review: the two stages bill differently.
+Leave `SMART_URL` unset and the reviewer asks the Go path, which is the one a container can use;
+point it somewhere else if the deployment is not on Go. The same key's Jev triage (`REVIEW_MODEL`)
+is free and works either way, which is why a run can report useful triage and still fail the
+review: the two stages bill differently.
+
+`OPENCODE_BASE_URL` is a **base**, not an endpoint: the driver appends its own path to it, so
+pointing it at `…/inference/go/openai/v1/` produces a URL with that path twice. Use `SMART_URL`
+for a full URL. The driver logs both endpoints once per review, so a wrong one is visible.
 
 ## The GitHub token
 

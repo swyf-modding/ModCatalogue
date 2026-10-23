@@ -36,7 +36,8 @@
 //                         default models are opencode/deepseek-v4.1-flash-free and
 //                         opencode/glm-5.3-flash-free, and SMART_STATE_CHARS defaults to 90000.
 //   OPENCODE_BIN          path to the opencode binary, default "opencode"
-//   SMART_URL             chat completions URL, default OpenCode's inference endpoint
+//   SMART_URL             chat completions URL, default OpenCode Go's endpoint
+//                         (https://opencode.ai/inference/go/openai/v1/chat/completions)
 //   SMART_API_KEY         key for SMART_URL, defaults to OPENCODE_API_KEY
 //   SMART_STATE_CHARS     characters the reviewer may be sent, default 240000
 //   REVIEW_STATE_CHARS    characters sent to Jev for triage, default 120000
@@ -713,7 +714,10 @@ async function decide(
 ): Promise<Decision | null> {
   if (SMART_MODE === "cli") return decideViaCli(system, user);
 
-  const url = process.env.SMART_URL ?? `${baseUrl}/inference/openai/v1/chat/completions`;
+  // Go's models are on their own path. The other one is the free tier, which only answers a
+  // logged-in OpenCode app and so cannot work from a container - so the default is the one that
+  // can, and SMART_URL points somewhere else for a deployment that is not on Go.
+  const url = process.env.SMART_URL ?? `${baseUrl}/inference/go/openai/v1/chat/completions`;
 
   for (const model of SMART_MODELS) {
     try {
