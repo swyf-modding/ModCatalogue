@@ -159,13 +159,18 @@ answer.
 
 ### OpenCode Go
 
-A Go subscription reaches its models on **its own path**, and asking the wrong one is what produces
-the message above:
+A Go subscription reaches its models on **its own path**, which the reviewer now asks by default:
+
+A model that has to read a whole source tree before answering is not slow so much as big: a
+review of eight files is around 100,000 characters, and one non-streaming call over that can run
+past a minute. `SMART_TIMEOUT_MS` is how long one model may take — five minutes by default, and
+the log line for a failure says how long it actually took. A `TimeoutError` at exactly the limit
+means the model was still thinking; an `ECONNRESET` before it means the connection went, which is
+usually the same size problem seen from the other side.
 
 ```sh
 docker run -d --name swyf-review -p 8080:8080 \
   -e SMART_MODE=http \
-  -e SMART_URL=https://opencode.ai/inference/go/openai/v1/chat/completions \
   -e SMART_MODELS=deepseek-v4.1-flash \
   -e OPENCODE_API_KEY=<your Go key> \
   swyf-review

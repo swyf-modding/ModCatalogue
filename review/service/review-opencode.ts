@@ -40,6 +40,9 @@
 //                         (https://opencode.ai/inference/go/openai/v1/chat/completions)
 //   SMART_API_KEY         key for SMART_URL, defaults to OPENCODE_API_KEY
 //   SMART_STATE_CHARS     characters the reviewer may be sent, default 240000
+//   SMART_TIMEOUT_MS      how long one model may take, default 300000 (http) or 150000 (cli).
+//                         A whole source tree is tens of thousands of tokens, and a model that
+//                         has to read it before answering is not slow so much as big.
 //   REVIEW_STATE_CHARS    characters sent to Jev for triage, default 120000
 //   TRIAGE_FILES          max files Jev scores for relevance on overflow, default 40
 //
@@ -81,7 +84,9 @@ const SMART_MODELS = (
   .split(",")
   .map((m) => m.trim())
   .filter(Boolean);
-const SMART_TIMEOUT_MS = SMART_MODE === "cli" ? 150_000 : 90_000;
+const SMART_TIMEOUT_MS = Number(
+  process.env.SMART_TIMEOUT_MS ?? (SMART_MODE === "cli" ? 150_000 : 300_000),
+);
 
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode";
 
@@ -727,6 +732,7 @@ async function decide(
   const url = reviewerUrl(baseUrl);
 
   for (const model of SMART_MODELS) {
+    const started = Date.now();
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -763,7 +769,8 @@ async function decide(
       }
       return { verdict: parsed.verdict, reason: parsed.reason, model };
     } catch (error) {
-      failed(model, String(error));
+      // Seconds, because "timed out" and "timed out after eleven of them" are different problems.
+      failed(model, `${String(error)} after ${Math.round((Date.now() - started) / 1000)}s`);
     }
   }
   return null;
