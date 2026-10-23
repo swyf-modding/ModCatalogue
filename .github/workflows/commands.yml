@@ -81,6 +81,11 @@ jobs:
   check:
     needs: command
     if: needs.command.outputs.run == 'true'
+    # See submission.yml: a newer command for this issue replaces an older run instead of
+    # racing it. The service keeps its own job in the background; only the report is replaced.
+    concurrency:
+      group: submission-${{ github.event.issue.number }}
+      cancel-in-progress: true
     uses: ./.github/workflows/check.yml
     with:
       issue: ${{ github.event.issue.number }}

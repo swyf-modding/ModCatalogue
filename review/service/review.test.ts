@@ -211,6 +211,19 @@ describe("a streamed reply", () => {
     expect(read.content).toBe("");
     expect(read.preview).toContain('"delta"');
   });
+
+  test("says how far it got when the connection goes", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(event('{"verdict":"ok"}')));
+        controller.error(new Error("ECONNRESET: The socket connection was closed"));
+      },
+    });
+
+    await expect(readStream(new Response(stream))).rejects.toThrow(
+      /the reply stopped after \d+ characters: Error: ECONNRESET/,
+    );
+  });
 });
 
 describe("where the token goes", () => {
@@ -235,6 +248,39 @@ describe("where the token goes", () => {
   test("the headers that are sent are not the ones that were given", () => {
     headersForHost(headers, "elsewhere.example");
     expect(headers.Authorization).toBe("Bearer ghp_secret");
+  });
+});
+
+describe("a connection that goes away", () => {
+  const realFetch = globalThis.fetch;
+  const url = "https://api.github.com/repos/someone/Thing/releases";
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  test("is tried once more", async () => {
+    let calls = 0;
+    globalThis.fetch = (async (_url: RequestInfo | URL, _init?: RequestInit) => {
+      calls++;
+      if (calls === 1) throw new Error("fetch failed");
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+
+    const response = await getGitHub(url, {});
+    expect(response?.status).toBe(200);
+    expect(calls).toBe(2);
+  });
+
+  test("a timeout is not retried, because it already spent the budget", async () => {
+    let calls = 0;
+    globalThis.fetch = (async (_url: RequestInfo | URL, _init?: RequestInit) => {
+      calls++;
+      throw new Error("TimeoutError: The operation timed out.");
+    }) as unknown as typeof fetch;
+
+    await expect(getGitHub(url, {})).rejects.toThrow("timed out");
+    expect(calls).toBe(1);
   });
 });
 

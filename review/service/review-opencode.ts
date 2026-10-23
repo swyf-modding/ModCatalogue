@@ -43,6 +43,13 @@
 //   SMART_TIMEOUT_MS      how long one model may take, default 300000 (http) or 150000 (cli).
 //                         A whole source tree is tens of thousands of tokens, and a model that
 //                         has to read it before answering is not slow so much as big.
+//   SMART_ATTEMPTS        tries per model, default 3. A reset partway through an answer is
+//                         common, and the same request usually lands on the next try.
+//   SMART_RETRY_DELAY_MS  base backoff between tries, default 3000 (multiplied by the attempt).
+//   SMART_DEADLINE_MS     total time for the models, default 1200000. The service kills this
+//                         child a little later, so this is what turns a kill into an answer.
+//   REVIEW_VERBOSE        "1" turns on Bun's own fetch trace. Off by default: it can include
+//                         request headers, and the API key is one of them.
 //   REVIEW_STATE_CHARS    characters sent to Jev for triage, default 120000
 //   TRIAGE_FILES          max files Jev scores for relevance on overflow, default 40
 //
@@ -87,6 +94,19 @@ const SMART_MODELS = (
 const SMART_TIMEOUT_MS = Number(
   process.env.SMART_TIMEOUT_MS ?? (SMART_MODE === "cli" ? 150_000 : 300_000),
 );
+// OpenCode's connections do go away mid-answer. One retry is not redundancy: the same reset
+// usually happens twice in a row. Three attempts, spaced out, is what turns a flaky edge into a
+// review that still answers.
+const SMART_ATTEMPTS = Math.max(1, Number(process.env.SMART_ATTEMPTS ?? 3));
+const SMART_RETRY_DELAY_MS = Math.max(0, Number(process.env.SMART_RETRY_DELAY_MS ?? 3_000));
+// The service kills this child after REVIEW_TIMEOUT_MS. Stopping a little earlier turns "killed,
+// no verdict" into "ran out of time, here is why" - which is the answer that helps.
+const SMART_DEADLINE_MS = Math.max(30_000, Number(process.env.SMART_DEADLINE_MS ?? 20 * 60_000));
+const STARTED_AT = Date.now();
+const remainingMs = (): number => Math.max(0, SMART_DEADLINE_MS - (Date.now() - STARTED_AT));
+// Bun's fetch can print its own connection trace. Off by default: it may include request
+// headers, and the Authorization header is in there. Turn it on to chase a reset.
+const REVIEW_VERBOSE = process.env.REVIEW_VERBOSE === "1";
 
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode";
 
@@ -355,6 +375,39 @@ function jevUrl(baseUrl: string): string {
 }
 
 /**
+ * An error, described completely enough to act on.
+ *
+ * A reset from fetch arrives as a TypeError with a one-line message and, underneath, the real
+ * cause. Logging only String(error) throws that away, and "the socket closed" without a name,
+ * code or stack is not something an operator can chase.
+ */
+export function errorText(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+
+  const parts = [`${error.name}: ${error.message}`];
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause) {
+    parts.push(`cause: ${cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)}`);
+  }
+  const code = (error as { code?: unknown }).code;
+  if (code != null) parts.push(`code: ${String(code)}`);
+  const stack = error.stack
+    ?.split("\n")
+    .slice(1, 4)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(" | ");
+  if (stack) parts.push(`at ${stack}`);
+
+  return parts.join("; ");
+}
+
+/** Wait, without a dependency. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
  * Whether trying the same request again is worth it.
  *
  * Everything except a timeout. A timeout already spent the whole budget, so a second attempt
@@ -363,7 +416,9 @@ function jevUrl(baseUrl: string): string {
  * 5xx never gets here, because those are reported before the throw.
  */
 function isTransient(error: unknown): boolean {
-  const text = String(error).toLowerCase();
+  // Name and message only: a stack that happens to mention AbortSignal.timeout is not a timeout.
+  const named = error as { name?: unknown; message?: unknown };
+  const text = `${named?.name ?? ""} ${named?.message ?? ""} ${String(error)}`.toLowerCase();
   return !text.includes("timeout") && !text.includes("abort");
 }
 
@@ -379,6 +434,8 @@ async function systemOne(
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
+      const budget = Math.min(timeoutMs, remainingMs());
+      if (budget < 5_000) throw new Error("the review ran out of time");
       const response = await fetch(jevUrl(baseUrl), {
         method: "POST",
         headers: {
@@ -386,7 +443,7 @@ async function systemOne(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ model, state, questions }),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(budget),
       });
       if (!response.ok) {
         const text = await response.text().catch(() => "");
@@ -396,7 +453,11 @@ async function systemOne(
     } catch (error) {
       lastError = error;
       if (attempt === 0 && isTransient(error)) {
-        console.error(`triage: ${String(error)}; trying again once`);
+        const wait = SMART_RETRY_DELAY_MS;
+        console.error(
+          `triage attempt ${attempt + 1}/2: ${errorText(error)}; trying again in ${wait} ms`,
+        );
+        await sleep(wait);
         continue;
       }
       throw error;
@@ -774,12 +835,22 @@ export async function readStream(response: Response): Promise<{
   let content = "";
   let reasoning = "";
   let finish = "";
+  let received = 0;
 
   for (;;) {
-    const { done, value } = await reader.read();
+    const chunk = await reader.read().catch((error: unknown) => {
+      // A reset mid-answer is the most common OpenCode failure, and how far it got is the
+      // difference between "the prompt is too big" and "the edge dropped us".
+      throw new Error(
+        `the reply stopped after ${received} characters: ${errorText(error)}`,
+      );
+    });
+
+    const { done, value } = chunk;
     if (done) break;
 
     const text = decoder.decode(value, { stream: true });
+    received += text.length;
     if (raw.length < 2000) raw += text;
     buffer += text;
 
@@ -830,8 +901,16 @@ async function decide(
   for (const model of SMART_MODELS) {
     let decided: Decision | null = null;
 
-    for (let attempt = 0; attempt < 2 && !decided; attempt++) {
+    for (let attempt = 0; attempt < SMART_ATTEMPTS && !decided; attempt++) {
       const started = Date.now();
+      const label = `reviewer ${model} attempt ${attempt + 1}/${SMART_ATTEMPTS}`;
+      const budget = Math.min(SMART_TIMEOUT_MS, remainingMs());
+
+      if (budget < 15_000) {
+        failed(model, "the review ran out of time before this attempt");
+        break;
+      }
+
       try {
         const res = await fetch(url, {
           method: "POST",
@@ -857,11 +936,24 @@ async function decide(
               { role: "user", content: user },
             ],
           }),
-          signal: AbortSignal.timeout(SMART_TIMEOUT_MS),
-        });
+          signal: AbortSignal.timeout(budget),
+          // Bun's own connection trace, when asked for. See REVIEW_VERBOSE.
+          ...(REVIEW_VERBOSE ? { verbose: true } : {}),
+        } as RequestInit & { verbose?: boolean });
+
         if (!res.ok) {
           const body = await res.text().catch(() => "");
-          failed(model, `${res.status} ${body.slice(0, 200)}`);
+          const line = `${res.status} ${body.slice(0, 300)}`;
+          const retryable = res.status === 408 || res.status === 429 || res.status >= 500;
+
+          if (retryable && attempt + 1 < SMART_ATTEMPTS) {
+            const wait = SMART_RETRY_DELAY_MS * (attempt + 1);
+            console.error(`${label}: ${line}; trying again in ${wait} ms`);
+            await sleep(wait);
+            continue;
+          }
+
+          failed(model, line);
           break;
         }
 
@@ -902,22 +994,41 @@ async function decide(
       } catch (error) {
         // Seconds, because "timed out" and "timed out after eleven of them" are different problems.
         const seconds = Math.round((Date.now() - started) / 1000);
+        const line = `${errorText(error)} after ${seconds}s`;
 
-        if (attempt === 0 && isTransient(error)) {
-          console.error(`reviewer ${model}: ${String(error)} after ${seconds}s; trying again once`);
+        if (attempt + 1 < SMART_ATTEMPTS && isTransient(error)) {
+          const wait = SMART_RETRY_DELAY_MS * (attempt + 1);
+          console.error(`${label}: ${line}; trying again in ${wait} ms`);
+          await sleep(wait);
           continue;
         }
 
-        failed(model, `${String(error)} after ${seconds}s`);
+        failed(model, line);
       }
     }
 
     if (decided) return decided;
+    if (remainingMs() < 15_000) break;
   }
   return null;
 }
 
 // -------------------------------------------------------------------- main
+
+/**
+ * A failure line with the model names taken out.
+ *
+ * The detail under a failed review goes to the issue, and the submitter should read what went
+ * wrong without being told which of the service's models was tried. The log keeps the real name.
+ */
+export function withoutModelNames(text: string): string {
+  let out = text;
+  for (const model of SMART_MODELS) {
+    const bare = model.includes("/") ? model.slice(model.lastIndexOf("/") + 1) : model;
+    out = out.split(model).join("the reviewer").split(bare).join("the reviewer");
+  }
+  return out;
+}
 
 /**
  * Turn the reviewer's answer into the message a person reads.
@@ -937,15 +1048,25 @@ export function composeVerdict(input: {
   triage: Triage;
   incompleteReasons: string[];
   coverage: string;
-}): { verdict: Verdict; reason: string } {
-  const { decision, triage, incompleteReasons, coverage } = input;
+  /** Why each model was given up on, for the detail under a failed review. */
+  failures?: string[];
+}): { verdict: Verdict; reason: string; detail?: string } {
+  const { decision, triage, incompleteReasons, coverage, failures = [] } = input;
 
   if (!decision) {
+    // The first failure is the useful one; the rest are the other models. Model names are
+    // stripped: the detail is shown in the issue, and which model was tried is not the
+    // submitter's business.
+    const why = failures.map(withoutModelNames).find((line) => line.trim());
+
     return {
       verdict: "unsure",
       reason:
         "The automated review could not be completed, so a maintainer will take a " +
         `look before this is listed. ${coverage}`,
+      detail: why
+        ? why.replace(/[{}<>`]/g, "").replace(/\s+/g, " ").trim().slice(0, 300)
+        : undefined,
     };
   }
 
@@ -1125,9 +1246,11 @@ async function main(): Promise<void> {
     triage,
     incompleteReasons,
     coverage,
+    failures: MODEL_FAILURES,
   });
   const verdict = combined.verdict;
   const reason = clean(combined.reason).replace(/\s+/g, " ").trim().slice(0, 900);
+  const detail = combined.detail ? clean(combined.detail) : undefined;
 
   // FLAT object only: strings and an array of strings, nothing nested.
   await writeFile(
@@ -1137,6 +1260,7 @@ async function main(): Promise<void> {
         verdict,
         reason,
         read: packed.included.slice(0, 80).map(clean),
+        ...(detail ? { detail } : {}),
       },
       null,
       2,

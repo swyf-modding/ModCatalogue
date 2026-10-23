@@ -115,6 +115,10 @@ let nextId = 1;
 /** Start a job over a list of mods and hand back its id. */
 async function start(mods: ModToReview[], token?: string): Promise<string> {
   const id = `job-${nextId++}`;
+  console.log(
+    `job ${id}: ${mods.length} mod(s) to review: ` +
+      mods.map((mod) => `${mod.owner}/${mod.repo}@${mod.release}`).join(", "),
+  );
   const promise = (async () => {
     const results = [];
     for (const mod of mods) {

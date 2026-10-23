@@ -19,6 +19,12 @@ param(
     # The review service's reply, as it sent it.
     [string]$Review,
 
+    # Why the review step failed, when it did.
+    [string]$ReviewError,
+
+    # The review is still running: this is the checks report, and the comment is updated later.
+    [switch]$ReviewPending,
+
     # What submission.ps1 printed when it refused the submission.
     [string]$Failure,
 
@@ -80,20 +86,63 @@ else {
 
     $verdict = $null
     $reason = $null
+    $detail = $null
     if ($Review -and (Test-Path $Review)) {
         $result = (Get-Content -Raw -LiteralPath $Review | ConvertFrom-Json).results | Select-Object -First 1
         if ($result) {
             $verdict = $result.verdict
             $reason = $result.reason
+            $detail = $result.detail
         }
     }
 
-    if ($verdict) {
+    if ($ReviewPending) {
+        Add-Line '### Review'
+        Add-Line ''
+        Add-Line 'The automated review is running now.'
+        Add-Line ''
+        [void]$labels.Add('review: running')
+    }
+    elseif ($verdict) {
         Add-Line '### Review'
         Add-Line ''
         Add-Line "**$verdict** - $reason"
         Add-Line ''
+        if ($detail) {
+            # Collapsed: the submitter gets the sentence above, the maintainer can open this.
+            Add-Line '<details><summary>What the review service said</summary>'
+            Add-Line ''
+            Add-Line '```'
+            foreach ($line in ($detail -split "`r?`n")) { Add-Line $line }
+            Add-Line '```'
+            Add-Line ''
+            Add-Line '</details>'
+            Add-Line ''
+        }
         [void]$labels.Add("review: $verdict")
+    }
+    elseif ($ReviewError) {
+        [void]$labels.Add('review: error')
+
+        $why = if (Test-Path -LiteralPath $ReviewError) {
+            (Get-Content -Raw -LiteralPath $ReviewError).Trim()
+        }
+        else {
+            $ReviewError
+        }
+
+        Add-Line '### Review'
+        Add-Line ''
+        Add-Line 'The automated review did not finish this time, so nothing was decided.'
+        Add-Line ''
+        Add-Line '<details><summary>What happened</summary>'
+        Add-Line ''
+        Add-Line '```'
+        foreach ($line in ($why.TrimEnd() -split "`r?`n")) { Add-Line $line }
+        Add-Line '```'
+        Add-Line ''
+        Add-Line '</details>'
+        Add-Line ''
     }
     else {
         [void]$labels.Add('review: none')
@@ -102,22 +151,31 @@ else {
     Add-Line '---'
     Add-Line ''
 
-    switch ($verdict) {
-        'ok' {
-            Add-Line 'This passes every check and the review agrees, so the pull request is opened'
-            Add-Line 'automatically. A maintainer can comment **`/recheck`** to run this again.'
-        }
-        'unsure' {
-            Add-Line 'The review was not certain, so this waits for a person. A maintainer can comment'
-            Add-Line '**`/recheck`** to run the checks and the review again, or **`/create-pr`** to list it anyway.'
-        }
-        'refuse' {
-            Add-Line 'The review refused this one. A maintainer who has read it and disagrees can comment'
-            Add-Line '**`/create-pr force`**; **`/recheck`** runs it again.'
-        }
-        default {
-            Add-Line 'No review service is configured, so the checks are the gate and the pull request is'
-            Add-Line 'opened automatically. A maintainer can comment **`/recheck`** to run this again.'
+    if ($ReviewPending) {
+        Add-Line 'The checks are done; the review takes a few minutes. This comment updates by itself.'
+    }
+    elseif ($ReviewError) {
+        Add-Line 'The checks above passed. A maintainer can comment **`/recheck`** to run the checks and'
+        Add-Line 'the review again.'
+    }
+    else {
+        switch ($verdict) {
+            'ok' {
+                Add-Line 'This passes every check and the review agrees, so the pull request is opened'
+                Add-Line 'automatically. A maintainer can comment **`/recheck`** to run this again.'
+            }
+            'unsure' {
+                Add-Line 'The review was not certain, so this waits for a person. A maintainer can comment'
+                Add-Line '**`/recheck`** to run the checks and the review again, or **`/create-pr`** to list it anyway.'
+            }
+            'refuse' {
+                Add-Line 'The review refused this one. A maintainer who has read it and disagrees can comment'
+                Add-Line '**`/create-pr force`**; **`/recheck`** runs it again.'
+            }
+            default {
+                Add-Line 'No review service is configured, so the checks are the gate and the pull request is'
+                Add-Line 'opened automatically. A maintainer can comment **`/recheck`** to run this again.'
+            }
         }
     }
 

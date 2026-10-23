@@ -4,7 +4,7 @@
 // next, and nothing about the models behind the answer.
 
 import { describe, expect, test } from "bun:test";
-import { composeVerdict, type Decision, type Triage } from "./review-opencode";
+import { composeVerdict, errorText, type Decision, type Triage } from "./review-opencode";
 
 const calm: Triage = { ok: true, tier: "low", flagged: [] };
 
@@ -24,6 +24,15 @@ const decide = (decision: Decision | null, overrides: Partial<Parameters<typeof 
   });
 
 describe("the review message", () => {
+  test("a failure is described fully, for the log", () => {
+    const error = new TypeError("ECONNRESET: The socket connection was closed unexpectedly");
+    (error as { code?: string }).code = "ECONNRESET";
+
+    const text = errorText(error);
+    expect(text).toContain("TypeError: ECONNRESET");
+    expect(text).toContain("code: ECONNRESET");
+  });
+
   test("a pass reads as a message for a person", () => {
     const { verdict, reason } = decide(matches);
     expect(verdict).toBe("ok");
@@ -66,6 +75,22 @@ describe("the review message", () => {
     expect(reason).toBe(
       "The automated review could not be completed, so a maintainer will take a look before this is listed. All 3 source files were read.",
     );
+  });
+
+  test("a failed review keeps the cause, without the model name", () => {
+    const { detail } = composeVerdict({
+      decision: null,
+      triage: { ok: false, tier: "unknown", flagged: [] },
+      incompleteReasons: [],
+      coverage: "All 2 source files were read.",
+      failures: ['deepseek-v4.1-flash returned 401 {"error":"no such model"}'],
+    });
+
+    expect(detail).toContain("401");
+    expect(detail).not.toContain("deepseek");
+    // Braces would break the flat verdict.json, so they never reach the file.
+    expect(detail).not.toContain("{");
+    expect(detail).not.toContain("}");
   });
 
   test("a refusal says the mod was not listed", () => {

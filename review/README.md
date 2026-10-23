@@ -33,8 +33,9 @@ docker run -d --name swyf-review \
   --security-opt no-new-privileges \
   --pids-limit 256 \
   --memory 2g \
-  -e OPENROUTER_API_KEY=sk-or-... \
+  -e OPENCODE_API_KEY=... \
   -e GITHUB_TOKEN=... \
+  -e DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... \
   swyf-review
 ```
 
@@ -57,7 +58,7 @@ POST /review      { "mods": [ ... ] }
 
 GET  /result?id=job-3
                   -> { "pending": true } while it runs,
-                     { "results": [ { owner, repo, release, verdict, reason, read } ] } when it is done
+                     { "results": [ { owner, repo, release, verdict, reason, detail, read } ] } when it is done
 
 POST /review-all
                   -> { "id": "..." } and the same polling
@@ -92,6 +93,10 @@ listed, and in the answer for one that is held back. It is written to be
 understood without the service around it, so it says what the code does and
 what happens next, and it never names the models that ran.
 
+When the reviewer could not answer at all, `detail` carries the short cause -
+a status from the provider, a timeout - for the issue to show collapsed under
+the verdict. It has the model names taken out, and it is optional.
+
 The default is `review-opencode.ts`, which sends the prompt and the facts to
 Jev via [OpenCode's Zen API](https://opencode.ai/v2/docs/api)
 (`POST /zen/v1/systemone`). Jev is a System One model: it takes unstructured
@@ -115,6 +120,24 @@ Set the model with `REVIEW_MODEL` (default `jev-1.13-free`):
 -e REVIEW_MODEL=jev-1.13-free
 ```
 
+The reviewing side is deliberately repetitive, because OpenCode's edge does drop connections:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `SMART_MODELS` | `deepseek-v4.1-flash,glm-5.3-flash` | comma list, tried in order - a second model is the strongest fallback |
+| `SMART_ATTEMPTS` | `3` | tries per model, for a reset or a 5xx |
+| `SMART_RETRY_DELAY_MS` | `3000` | base backoff; the nth retry waits n times this |
+| `SMART_TIMEOUT_MS` | `300000` | one attempt |
+| `SMART_DEADLINE_MS` | `1200000` | all model time, retries included |
+| `REVIEW_TIMEOUT_MS` | `1320000` | the whole reviewer, retries included |
+| `GITHUB_TIMEOUT_MS` | `120000` | one GitHub request |
+| `REVIEW_VERBOSE` | off | `1` turns on Bun's fetch trace; it can log request headers |
+| `DISCORD_WEBHOOK_URL` | unset | where a failed review is announced |
+
+A failed review posts the mod, how long it ran, and the error to `DISCORD_WEBHOOK_URL` when it
+is set. The workflow announces submissions on its own, so a webhook is a nudge rather than the
+only way to notice.
+
 The container needs to reach OpenCode and GitHub, and that is the whole list —
 set an egress policy at the firewall or in front of the container accordingly.
 
@@ -129,25 +152,27 @@ Swapping in a different agent is one variable:
 
 ## Seeing why a review failed
 
-A verdict of `unsure` that says *"the full review could not run (every reviewer model failed or
-timed out)"* means stage 1 answered and stage 2 did not - the triage line in the same reason
-shows what Jev made of it, so the network and the API key are fine and the reviewer is what
-failed. The reason now carries the last model's error as well, so the issue usually says enough
-on its own.
+The service logs each stage as it starts: downloading the release, staging the source, asking the
+reviewer, and then the verdict or the error with how long it took. A review that is still going
+says so once a minute, so an empty log means no review was asked for - not that one is stuck.
 
-For the rest, the service prints the reviewer's output - one line per model - so:
+The reviewer's own output is logged too when it did not produce a clean pass: every attempt,
+with its number, how long it took, the error's name, message, cause and code, and - for a
+streamed answer - how many characters arrived before the connection went. `REVIEW_VERBOSE=1`
+adds Bun's own fetch trace, which can include request headers. For anything else, watch the
+service and ask it about one mod directly:
 
 ```sh
 docker logs -f swyf-review
-```
-
-and then ask it about one mod directly, without a submission:
-
-```sh
 sh tools/try-review.sh swyf-modding AI-Backend v1.2.1 http://127.0.0.1:8080
 ```
 
-A test that fails there is the service's problem, not the workflow's.
+A test that fails there is the service's problem, not the workflow's. The workflow now also puts
+the error in the issue comment, so a red run is never the only place it exists.
+
+A GitHub request that times out is usually egress: the container needs `api.github.com` and the
+release CDN (`github.com` redirects to `objects.githubusercontent.com`). `GITHUB_TIMEOUT_MS`
+(default `120000`) is how long one request may take before it is given up on.
 
 ### The free tier cannot review a mod
 

@@ -28,6 +28,11 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       startsWith(github.event.issue.title, 'Mod submission:')
+    # One check per issue at a time. A recheck asked for while this is still reviewing takes
+    # over, rather than two runs updating the same comment with different answers.
+    concurrency:
+      group: submission-${{ github.event.issue.number || inputs.issue }}
+      cancel-in-progress: true
     uses: ./.github/workflows/check.yml
     with:
       issue: ${{ github.event.issue.number || inputs.issue }}

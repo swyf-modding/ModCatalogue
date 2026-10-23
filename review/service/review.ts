@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { inflateRawSync } from "node:zlib";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { notifyDiscord } from "./notify";
 
 const GITHUB_API = "https://api.github.com";
 const MAX_ZIP_BYTES = 256 * 1024 * 1024;
@@ -40,6 +41,8 @@ export interface ModToReview {
 export interface Verdict {
   verdict: "ok" | "unsure" | "refuse";
   reason: string;
+  /** Why the reviewer could not answer, when it could not; shown under a failed review. */
+  detail?: string;
   /** The files the agent says it read, when it says. */
   read?: string[];
 }
@@ -128,6 +131,24 @@ function run(
  *  CDN, so the redirects are followed by hand and the header is left behind at GitHub. */
 const TOKEN_HOSTS = new Set(["api.github.com", "github.com"]);
 
+/**
+ * How long one GitHub request may take.
+ *
+ * A review's first two calls are a release lookup and an asset download, and the asset comes
+ * from a CDN. Two minutes is generous for both; an operator whose link is slower can raise it
+ * without rebuilding the image.
+ */
+const GITHUB_TIMEOUT_MS = Number(process.env.GITHUB_TIMEOUT_MS ?? 120_000);
+
+/**
+ * How long the reviewer child may run.
+ *
+ * It is longer than one model call because the reviewer retries a reset connection, and those
+ * retries are the point: a flaky edge should not cost the submission its review. The workflow
+ * polls for longer than this, so a reviewer that runs out of time is reported before the poll is.
+ */
+const REVIEW_TIMEOUT_MS = Number(process.env.REVIEW_TIMEOUT_MS ?? 22 * 60_000);
+
 /** The headers to send to a host: the token for GitHub, everything else without it. */
 export function headersForHost(
   headers: Record<string, string>,
@@ -160,7 +181,7 @@ async function fetchWithRedirects(
       redirect: "manual",
       // Bounded: a stalled connection should come back as "could not read it", not as a job
       // that sits at "pending" until somebody notices.
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
     });
 
     if (response.status >= 300 && response.status < 400) {
@@ -176,6 +197,26 @@ async function fetchWithRedirects(
   return null;
 }
 
+/** Whether the same request is worth making again: a connection that went away, not a timeout. */
+function isTransient(error: unknown): boolean {
+  const text = String(error).toLowerCase();
+  return !text.includes("timeout") && !text.includes("abort");
+}
+
+/** A GitHub fetch, tried once more when the connection - not the clock - is what failed. */
+async function fetchGitHub(
+  url: string,
+  headers: Record<string, string>,
+): Promise<Response | null> {
+  try {
+    return await fetchWithRedirects(url, headers);
+  } catch (error) {
+    if (!isTransient(error)) throw error;
+    console.error(`github: ${String(error)}; trying once more`);
+    return fetchWithRedirects(url, headers);
+  }
+}
+
 /**
  * A GitHub request, retried without the token when the token is what failed.
  *
@@ -187,14 +228,14 @@ export async function getGitHub(
   url: string,
   headers: Record<string, string>,
 ): Promise<Response | null> {
-  const first = await fetchWithRedirects(url, headers);
+  const first = await fetchGitHub(url, headers);
   if (first && first.ok) return first;
   if (!headers.Authorization) return first;
   if (!first || (first.status !== 403 && first.status !== 404)) return first;
 
   const without = { ...headers };
   delete without.Authorization;
-  return fetchWithRedirects(url, without);
+  return fetchGitHub(url, without);
 }
 
 /** Download the release's zip. It is opened, never run. */
@@ -385,7 +426,7 @@ export function extractVerdict(output: string): Verdict | null {
   const candidates = [...output.matchAll(/\{[^{}]*"verdict"[^{}]*\}/gs)].map((m) => m[0]);
 
   for (let i = candidates.length - 1; i >= 0; i--) {
-    let parsed: { verdict?: unknown; reason?: unknown; read?: unknown };
+    let parsed: { verdict?: unknown; reason?: unknown; read?: unknown; detail?: unknown };
     try {
       parsed = JSON.parse(candidates[i]) as typeof parsed;
     } catch {
@@ -397,6 +438,7 @@ export function extractVerdict(output: string): Verdict | null {
     return {
       verdict: parsed.verdict === "ok" || parsed.verdict === "refuse" ? parsed.verdict : "unsure",
       reason: typeof parsed.reason === "string" ? parsed.reason : "",
+      detail: typeof parsed.detail === "string" ? parsed.detail : undefined,
       read: Array.isArray(parsed.read) ? parsed.read.filter((r) => typeof r === "string") : undefined,
     };
   }
@@ -449,16 +491,28 @@ export async function reviewMod(
   options: { token?: string } = {},
 ): Promise<Verdict> {
   let workDir: string | null = null;
+  const started = Date.now();
+  const where = `${mod.owner}/${mod.repo}@${mod.release}`;
+  const elapsed = (): string => `${Math.round((Date.now() - started) / 1000)}s`;
 
   try {
     workDir = await mkdtemp(join(tmpdir(), "swyf-review-"));
     const modDir = join(workDir, "mod");
     await mkdir(modDir, { recursive: true });
 
+    // Each stage is logged as it starts. A review is minutes of silence otherwise, and "the
+    // service said nothing" is not a thing anybody can act on.
+    console.error(`review ${where}: downloading the release`);
     const zipBytes = await downloadRelease(mod, workDir, options.token);
     const fileNames = zipBytes ? await unpack(zipBytes, modDir) : [];
+    console.error(
+      `review ${where}: ${
+        zipBytes ? `${fileNames.length} files in the release` : "no release could be downloaded"
+      }; staging the source`,
+    );
 
     const sourceNames = await stageSource(mod, workDir);
+    console.error(`review ${where}: ${sourceNames.length} source files; asking the reviewer`);
 
     await Bun.write(join(workDir, "prompt.md"), buildPrompt(mod));
     await Bun.write(
@@ -472,13 +526,24 @@ export async function reviewMod(
     await chmod(workDir, 0o755);
 
     const command = process.env.REVIEW_COMMAND ?? "/app/service/review-opencode.ts";
-    const output = await run(process.execPath, [command, workDir], {
-      cwd: workDir,
-      timeout: 15 * 60_000,
-      maxBuffer: 8 * 1024 * 1024,
-      // The agent is told not to run anything, and this makes it a little harder.
-      env: { ...process.env, REVIEW_MODEL: process.env.REVIEW_MODEL ?? "", REVIEW_READ_ONLY_DIR: modDir },
-    });
+    // A long review is not a hung one, and a line a minute is what tells the two apart.
+    const heartbeat = setInterval(() => {
+      console.error(`review ${where}: still waiting for the reviewer (${elapsed()})`);
+    }, 60_000);
+
+    let output: string;
+    try {
+      output = await run(process.execPath, [command, workDir], {
+        cwd: workDir,
+        timeout: REVIEW_TIMEOUT_MS,
+        maxBuffer: 8 * 1024 * 1024,
+        // The agent is told not to run anything, and this makes it a little harder.
+        env: { ...process.env, REVIEW_MODEL: process.env.REVIEW_MODEL ?? "", REVIEW_READ_ONLY_DIR: modDir },
+      });
+    } finally {
+      clearInterval(heartbeat);
+    }
+    console.error(`review ${where}: the reviewer answered in ${elapsed()}`);
 
     // Keep what the agent printed. When every model fails, its output is the only place the
     // reason exists - and it is what somebody needs after "the review could not run".
@@ -497,6 +562,9 @@ export async function reviewMod(
     // verdict.json comes first, and on its own: it is what the agent left behind,
     // and a transcript that disagrees with it is narration, not an answer.
     const verdict = readVerdict(workDir);
+    console.error(
+      `review ${where}: ${verdict ? `verdict ${verdict.verdict}` : "no verdict"} after ${elapsed()}`,
+    );
 
     // The agent is a child process: nothing it prints reaches this service's log unless it is
     // forwarded, and when a model fails that output is the only explanation there is. Kept for
@@ -510,6 +578,7 @@ export async function reviewMod(
     // no release and no source - then the answer is "unsure" whatever the agent
     // said, because it said it about a summary and a list of hashes.
     if (!verdict) {
+      void notifyDiscord(`**Review failed** ${where}\nThe reviewer produced no verdict.`);
       return {
         verdict: "unsure",
         reason:
@@ -519,6 +588,9 @@ export async function reviewMod(
     }
 
     if (verdict.verdict === "ok" && fileNames.length === 0 && sourceNames.length === 0) {
+      void notifyDiscord(
+        `**Review failed** ${where}\nNeither the release nor the source could be read.`,
+      );
       return {
         verdict: "unsure",
         reason:
@@ -528,15 +600,46 @@ export async function reviewMod(
       };
     }
 
+    if (verdict.detail) {
+      void notifyDiscord(`**Review failed** ${where}\n${verdict.detail}`);
+    }
+
     return {
       verdict: verdict.verdict,
       reason: verdict.reason || "The review did not give a reason.",
+      detail: verdict.detail,
       read: verdict.read,
     };
   } catch (error) {
-    // A driver that exits non-zero says why on its stderr, and that is the only copy.
-    const stderr = (error as { stderr?: string }).stderr;
-    if (stderr && stderr.trim()) console.error(`review agent failed:\n${stderr.trim().slice(-2000)}`);
+    // A driver that exits non-zero says why on its stderr, and that is the only copy. A thrown
+    // fetch or timeout has neither, so the error itself is logged: without this line, a review
+    // that failed before the agent started leaves nothing at all in the log.
+    const e = error as {
+      name?: string;
+      message?: string;
+      stack?: string;
+      stderr?: string;
+      stdout?: string;
+      code?: unknown;
+      signal?: unknown;
+      killed?: boolean;
+    };
+    const detail = [
+      e.name ? `${e.name}: ${e.message ?? ""}`.trim() : String(error),
+      e.code != null ? `code ${String(e.code)}` : "",
+      e.signal ? `signal ${String(e.signal)}` : "",
+      e.killed ? "killed" : "",
+    ]
+      .filter(Boolean)
+      .join(", ");
+    console.error(`review ${where} failed after ${elapsed()}: ${detail}`);
+    if (e.stack) console.error(`review ${where} stack:\n${e.stack.split("\n").slice(0, 8).join("\n")}`);
+
+    if (e.stderr && e.stderr.trim()) console.error(`review agent failed:\n${e.stderr.trim().slice(-2000)}`);
+    if (e.stdout && e.stdout.trim()) console.error(`review agent output:\n${e.stdout.trim().slice(-3000)}`);
+
+    void notifyDiscord(`**Review failed** ${where} after ${elapsed()}\n${detail}`);
+
     return {
       verdict: "unsure",
       reason:

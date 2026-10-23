@@ -121,11 +121,13 @@ What happens after you send it:
    loader reads with a version the loader can parse, and every setup step has to name a script the
    release really holds. Half an entry is how a mod ends up installed with its library missing.
 3. **Everything found is written to the issue**, in one comment: the files with their hashes and
-   capabilities, the setup steps, and what the review made of it. A re-run edits that comment
-   rather than adding another.
+   capabilities, the setup steps, and what the review made of it. The comment goes up as soon as
+   the checks finish, with the review marked as running, and is edited in place when the review
+   answers. A re-run edits that comment rather than adding another.
 4. **If it all passes, a pull request is opened** with the checked entry, as the project's bot.
    If anything does not pass, nothing is opened: the comment says what is wrong, and a maintainer
-   decides what happens next.
+   decides what happens next. If the review service itself fails, the comment says so and the run
+   is red, rather than leaving the issue looking stuck.
 
 The merge is still a person's. A catalogue is a list of code people install, and the step that
 puts an entry in it is one somebody should be able to see and undo.
@@ -144,8 +146,8 @@ only answered for people with write access.
 `/recheck` is the useful one after an author publishes a fixed release: the entry re-pins to it,
 and a pull request that is already open is updated rather than duplicated.
 
-The issue also carries labels, so the list says what is waiting: `review: ok`, `review: unsure`,
-`review: refuse`, `review: failed`, and `pr: opened`.
+The issue also carries labels, so the list says what is waiting: `review: running`, `review: ok`,
+`review: unsure`, `review: refuse`, `review: error`, `review: failed`, and `pr: opened`.
 
 The listing can also be reviewed by a model, which reads the scan results and the entry and says
 whether the summary describes what the code does. It is not a safety verdict and does not pretend to
@@ -339,6 +341,11 @@ So the split is: **the app writes** (issues, commits, pull requests) and **the r
 reads** (releases, source, the catalogue). The writes are the ones that need a durable
 identity and an audit trail; the reads are the bulk of the requests, and they are the
 part a public read token can do.
+
+**Notifications.** A repository secret `DISCORD_WEBHOOK_URL` makes the workflow post one line
+per run: the mod, the outcome, and a link to the issue. The review container reads the same
+variable name for its own webhook, which carries a failed review and its error. Both are silent
+when the variable is unset; the container's settings are in `review/README.md`.
 
 ## Trust
 
