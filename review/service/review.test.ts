@@ -6,6 +6,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPrompt, getGitHub, headersForHost, parseVerdict, readVerdict } from "./review";
+import { readStream } from "./review-opencode";
 
 const mod = {
   owner: "swyf-modding",
@@ -142,6 +143,44 @@ describe("what the agent left behind", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("a streamed reply", () => {
+  const encoder = new TextEncoder();
+  const event = (delta: string) =>
+    `data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`;
+
+  async function streamed(...chunks: string[]): Promise<string> {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        controller.close();
+      },
+    });
+
+    return readStream(
+      new Response(stream, { headers: { "content-type": "text/event-stream" } }),
+    );
+  }
+
+  test("is joined back together", async () => {
+    expect(await streamed(event('{"verdict":"ok"}'), "data: [DONE]\n\n")).toBe('{"verdict":"ok"}');
+  });
+
+  test("survives a line split across two reads", async () => {
+    // The reset this is protecting against happens mid-connection, so a chunk boundary is
+    // routinely in the middle of a line rather than neatly after one.
+    const body = event('{"verdict":"ok"}') + "data: [DONE]\n\n";
+    const cut = Math.floor(body.length / 2);
+
+    expect(await streamed(body.slice(0, cut), body.slice(cut))).toBe('{"verdict":"ok"}');
+  });
+
+  test("ignores keep-alives and anything that is not a chunk", async () => {
+    expect(await streamed(": ping\n\n", "data: {not json}\n\n", event('{"verdict":"ok"}'))).toBe(
+      '{"verdict":"ok"}',
+    );
   });
 });
 

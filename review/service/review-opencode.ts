@@ -743,6 +743,52 @@ async function decideViaCli(system: string, user: string): Promise<Decision | nu
  * Go's models are on their own path; the other one serves the free tier, which only answers a
  * logged-in OpenCode app and so cannot work from a container. `SMART_URL` overrides both.
  */
+/**
+ * A streamed reply, read as it arrives.
+ *
+ * A review sends a whole source tree, and the answer can take minutes. Asked without streaming,
+ * the connection carries nothing for that whole time, and a proxy that is tired of waiting closes
+ * it - which is the reset that looks like the model failing. Streamed, the first token arrives in
+ * seconds and the bytes keep coming, so there is no idle connection to give up on.
+ */
+export async function readStream(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("the reply had no body");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    let newline: number;
+    while ((newline = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+
+      try {
+        const chunk = JSON.parse(data);
+        const delta = chunk?.choices?.[0]?.delta?.content ?? chunk?.choices?.[0]?.message?.content;
+        if (typeof delta === "string") content += delta;
+      } catch {
+        // A keep-alive, or a line split across reads; the buffer handles the second case.
+      }
+    }
+
+    if (content.length > 200_000) break;
+  }
+
+  return content;
+}
+
 function reviewerUrl(baseUrl: string): string {
   return process.env.SMART_URL ?? `${baseUrl}/inference/go/openai/v1/chat/completions`;
 }
@@ -777,6 +823,9 @@ async function decide(
             model,
             max_tokens: 800,
             temperature: 0.1,
+            // Streamed, so a long review is not a silent connection. A provider that ignores this
+            // answers with JSON, which the content type says.
+            stream: true,
             messages: [
               { role: "system", content: system },
               { role: "user", content: user },
@@ -789,11 +838,19 @@ async function decide(
           failed(model, `${res.status} ${body.slice(0, 200)}`);
           break;
         }
-        const json: any = await res.json();
-        const content = json?.choices?.[0]?.message?.content;
+
+        const type = res.headers.get("content-type") ?? "";
+        let content: string;
+        if (type.includes("text/event-stream")) {
+          content = await readStream(res);
+        } else {
+          const json: any = await res.json();
+          content = json?.choices?.[0]?.message?.content ?? "";
+        }
+
         const parsed = typeof content === "string" ? extractVerdict(content) : null;
         if (!parsed) {
-          failed(model, "no usable verdict in the reply");
+          failed(model, `no usable verdict in the reply: ${String(content).slice(0, 200)}`);
           break;
         }
         decided = { verdict: parsed.verdict, reason: parsed.reason, model };
@@ -983,7 +1040,10 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+// Run only as a program. Imported by the tests, this file must not start a review.
+if (import.meta.main) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
