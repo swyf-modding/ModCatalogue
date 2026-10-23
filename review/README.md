@@ -153,22 +153,32 @@ OpenCode's free models answer only a logged-in app:
 ```
 
 A container is not the app. `SMART_MODE=cli` runs the real binary with a private empty `HOME`, so
-it has no login; `SMART_MODE=http` sends the same request to the API and gets the same refusal
-because the model is a free one. Either way the verdict comes back `unsure` with that message,
-which is the honest answer.
+it has no login; `SMART_MODE=http` gets the same refusal when it asks the endpoint that serves the
+free tier. Either way the verdict comes back `unsure` with that message, which is the honest
+answer.
 
-The reviewer therefore needs a **paid model**, and the image defaults to the API for that reason:
+### OpenCode Go
+
+A Go subscription reaches its models on **its own path**, and asking the wrong one is what produces
+the message above:
 
 ```sh
 docker run -d --name swyf-review -p 8080:8080 \
   -e SMART_MODE=http \
-  -e OPENCODE_API_KEY=<a key with credit> \
+  -e SMART_URL=https://opencode.ai/inference/go/openai/v1/chat/completions \
+  -e SMART_MODELS=deepseek-v4.1-flash \
+  -e OPENCODE_API_KEY=<your Go key> \
   swyf-review
 ```
 
-`SMART_MODELS` defaults to `deepseek-v4.1-flash,glm-5.3-flash` in that mode — a bare name, no
-`opencode/` prefix. Jev's triage is free and works with the same key, which is why a run can
-report useful triage and still fail the review: the two stages bill differently.
+Beam Free is in the Go list too, so `SMART_MODELS=beam-free` works on that path. The list of
+models this client can use is the ones Go serves over `openai/v1/chat/completions` — the GLM,
+Kimi, DeepSeek, MiMo, MiniMax, Hy and Beam families. Qwen, Claude, GPT and Grok are served over
+Anthropic's or OpenAI's *Responses* shape, which this client does not speak.
+
+Leave `SMART_URL` unset and the reviewer asks the free-tier endpoint, which is only useful with a
+logged-in app. The same key's Jev triage (`REVIEW_MODEL`) is free and works either way, which is
+why a run can report useful triage and still fail the review: the two stages bill differently.
 
 ## The GitHub token
 

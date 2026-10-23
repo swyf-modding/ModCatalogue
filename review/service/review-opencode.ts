@@ -721,6 +721,9 @@ async function decide(
         method: "POST",
         headers: {
           Authorization: `Bearer ${process.env.SMART_API_KEY ?? apiKey}`,
+          // OpenCode asks a client to name itself rather than arrive as a bare HTTP library, and
+          // to hold one session per conversation for routing and prompt caching.
+          "User-Agent": "swyf-modding-review/1.0",
           ...(url.includes("opencode.ai") ? { "x-opencode-session": SESSION_ID } : {}),
           "Content-Type": "application/json",
         },
@@ -774,6 +777,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const jevModel = process.env.REVIEW_MODEL || "jev-1.13-free";
+
+  // The two endpoints, once per review. A base URL with a path in it turns into a nonsense URL,
+  // and this is the line that makes that obvious instead of looking like a TLS problem.
+  if (SMART_MODE !== "cli") {
+    const chat = process.env.SMART_URL ?? `${baseUrl}/inference/openai/v1/chat/completions`;
+    console.error(`reviewer endpoint: ${chat} (triage: ${baseUrl}/zen/v1/systemone)`);
+  }
 
   const { files, skipped } = await collectSource(join(workDir, "source"));
 
