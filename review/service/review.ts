@@ -498,13 +498,18 @@ export async function reviewMod(
     // and a transcript that disagrees with it is narration, not an answer.
     const verdict = readVerdict(workDir);
 
+    // The agent is a child process: nothing it prints reaches this service's log unless it is
+    // forwarded, and when a model fails that output is the only explanation there is. Kept for
+    // anything that is not a clean pass, so the log is not a stream of successful reviews.
+    if (output.trim() && (!verdict || verdict.verdict !== "ok")) {
+      const text = output.trim();
+      console.error(`review agent:\n${text.length > 4000 ? "…\n" + text.slice(-4000) : text}`);
+    }
+
     // A review that could not read the code is not a review. If nothing arrived -
     // no release and no source - then the answer is "unsure" whatever the agent
     // said, because it said it about a summary and a list of hashes.
     if (!verdict) {
-      const tail = output.trim().slice(-2000);
-      console.error(`review agent produced no verdict${tail ? `:\n${tail}` : " and said nothing"}`);
-
       return {
         verdict: "unsure",
         reason: "the review did not produce a verdict, so the submission is held back for a person",

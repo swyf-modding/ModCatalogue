@@ -664,7 +664,12 @@ function runCli(model: string, message: string): Promise<string | null> {
     child.on("close", async (code) => {
       clearTimeout(timer);
       if (code !== 0) {
-        failed(model, `opencode exited ${code}: ${stderr.slice(0, 300)}`);
+        // A process killed by the kernel says nothing, and the usual reason on a rented machine
+        // is a CPU the binary was not built for. Naming that beats an empty stderr.
+        const said = stderr.trim();
+        failed(model, said
+          ? `opencode exited ${code}: ${said.slice(0, 300)}`
+          : `opencode exited ${code} and said nothing, which is what a binary for the wrong CPU does`);
       }
       await cleanup();
       resolve(code === 0 ? stdout : null);
