@@ -356,9 +356,13 @@ jobs:
         run: |
           $branch = "submission/issue-$env:ISSUE"
           $subject = gh api "repos/$($env:GITHUB_REPOSITORY)/issues/$($env:ISSUE)" --jq .title
-          $found = gh pr list --head $branch --state all --json number,state --jq '.[0] | "\(.number) \(.state)"'
-          $number = ($found -split ' ')[0]
-          $state = ($found -split ' ')[1]
+
+          # Ask for the fields one at a time. A jq string interpolation of an absent pull request
+          # produces the word "null", which is truthy here and was read as a real number: the
+          # workflow then tried to edit "#null" instead of opening the pull request.
+          $number = gh pr list --head $branch --state all --json number --jq '.[0].number // empty'
+          $state = gh pr list --head $branch --state all --json state --jq '.[0].state // empty'
+          if ($LASTEXITCODE -ne 0) { throw "Could not look for a pull request for $branch." }
 
           $name = if ($env:BOT_SLUG) { "$($env:BOT_SLUG)[bot]" } else { 'swyf-modding-bot' }
           $email = if ($env:BOT_SLUG) { "$($env:BOT_SLUG)[bot]@users.noreply.github.com" } else { 'bot@swyf-modding.invalid' }
@@ -373,6 +377,7 @@ jobs:
             git commit -m "Add a mod from a submission: $subject"
             # One branch per issue, and the bot is the only thing that writes it.
             git push -u origin $branch --force
+            if ($LASTEXITCODE -ne 0) { throw "Could not push $branch." }
           }
           else {
             Write-Host 'The catalogue already says exactly this.'
@@ -405,12 +410,22 @@ jobs:
 
           if ($number) {
             gh pr edit $number --body-file ./out/pr-body.md | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Could not update pull request #$number." }
             if ($state -eq 'CLOSED') { gh pr reopen $number | Out-Null }
             $url = gh pr view $number --json url --jq .url
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($url)) {
+              throw "Could not read the address of pull request #$number."
+            }
             Write-Host "Updated #$number."
           }
           else {
             $url = gh pr create --title $subject --body-file ./out/pr-body.md --base main --head $branch
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($url)) {
+              # It may have been opened while this ran; report that one, not an empty link.
+              $url = gh pr view $branch --json url --jq .url 2>$null
+              if ([string]::IsNullOrWhiteSpace($url)) { throw "Could not open a pull request for $branch." }
+            }
+            Write-Host "Opened $url."
           }
 
           gh label create 'pr: opened' --force 2>$null | Out-Null
