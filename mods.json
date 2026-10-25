@@ -143,6 +143,29 @@
       ]
     },
     {
+      "owner": "swyf-modding",
+      "repo": "ScamWithYourSlang",
+      "displayName": "Scam With Your Slang",
+      "summary": "Adds additional language support and community translations. Includes a finished Dutch translation, every language the game already ships so existing lines can be corrected, and any new language a translator writes. Added languages appear in Settings and work with the game's voice recognition.",
+      "approvedVersion": "0.3.0",
+      "files": [
+        {
+          "fileName": "ScamWYF.Translate.dll",
+          "folder": "plugins",
+          "expectsPluginAttribute": true,
+          "sha256": "31437716bcaee21e529e988d0e8bb65b188bf35b54d7f6d0ef79664ae8091345",
+          "capabilities": [
+            "dynamic-code",
+            "filesystem-read",
+            "filesystem-write"
+          ],
+          "bepInPlugin": [
+            "net.swyf.translate | SWYF Translate | 0.3.0"
+          ]
+        }
+      ]
+    },
+    {
       "owner": "TIMOFEITV",
       "repo": "ScamWYF-Twitch-Control",
       "displayName": "ScamWYF Twitch Control",
