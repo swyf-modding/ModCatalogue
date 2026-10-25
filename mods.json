@@ -143,6 +143,38 @@
       ]
     },
     {
+      "owner": "swyf-modding",
+      "repo": "swyf-better-browse",
+      "displayName": "Better Browse",
+      "summary": "Replaces the search engine to brave by default, but many others work like DDG. Meant to stop the Google captcha issue leaking IP addresses",
+      "approvedVersion": "v0.1.0",
+      "files": [
+        {
+          "fileName": "ScamWYF.BetterBrowse.dll",
+          "folder": "plugins",
+          "expectsPluginAttribute": true,
+          "sha256": "eff01090245c916e5e2e902fa1c5b42df46df2f3b1e1cec52b8978236ba91328",
+          "capabilities": [
+            "dynamic-code"
+          ],
+          "bepInPlugin": [
+            "com.community.scamwyf.betterbrowse | Scam WYF Better Browse | 0.1.0"
+          ]
+        },
+        {
+          "fileName": "ScamWYF.Modding.Core.dll",
+          "folder": "core",
+          "expectsPluginAttribute": false,
+          "sha256": "b4c0b9161c30d4ce50f804d9aeed1a52fc916438186c2c40184bec2cb5f26175",
+          "capabilities": [
+            "dynamic-code",
+            "filesystem-read",
+            "filesystem-write"
+          ]
+        }
+      ]
+    },
+    {
       "owner": "xofa18",
       "repo": "SWYF-ModManager",
       "displayName": "Mod Manager",
