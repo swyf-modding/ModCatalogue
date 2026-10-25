@@ -3,6 +3,11 @@ name: Verify catalogue
 # Runs on changes, and weekly. The weekly run is the one that matters most: a git tag can be
 # moved and a release asset can be replaced after the fact, so a pin that verified at merge
 # time is not guaranteed to still describe the same bytes a month later.
+#
+# A change is held to the entries it touches, and only those. Reading a release is the slow,
+# network-bound part, and an unrelated entry whose release was taken down would otherwise fail
+# every submission - which says nothing about the submission. The weekly sweep still reads the
+# whole catalogue, because there a broken entry is exactly the thing worth reporting.
 
 on:
   pull_request:
@@ -27,6 +32,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The catalogue is compared with the one this change started from, so that commit
+          # has to be here.
+          fetch-depth: 0
 
       # The rules are the part that can be wrong without anybody noticing for weeks, so
       # they have a test of their own. It needs no network and no releases.
@@ -41,9 +50,54 @@ jobs:
         shell: pwsh
         run: ./tools/check-catalogue.ps1
 
+      # A submission touches one entry. This says which ones, so the slow check below reads
+      # those releases and no others.
+      - name: Find the entries this change touches
+        id: touched
+        shell: pwsh
+        env:
+          BEFORE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if (-not $env:BEFORE -or $env:BEFORE -match '^0+$') {
+            # A scheduled or dispatched run has nothing to compare with, and a brand new
+            # branch has no earlier catalogue: in both cases, read everything.
+            'entries=all' >> $env:GITHUB_OUTPUT
+            Write-Host 'No earlier catalogue to compare with; every entry will be verified.'
+            exit 0
+          }
+
+          $beforePath = Join-Path ([IO.Path]::GetTempPath()) 'mods-before.json'
+          git show "$($env:BEFORE):mods.json" | Set-Content -LiteralPath $beforePath -Encoding utf8
+          if ($LASTEXITCODE -ne 0) {
+            # The catalogue did not exist before, so every entry in it is new.
+            Set-Content -LiteralPath $beforePath -Value '{ "schemaVersion": 1, "mods": [] }' -Encoding utf8
+          }
+
+          $repos = @(& ./tools/changed-mods.ps1 -Before $beforePath)
+          if ($repos.Count -eq 0) {
+            'entries=none' >> $env:GITHUB_OUTPUT
+            Write-Host 'No catalogue entry changed.'
+            exit 0
+          }
+
+          'entries=' + ($repos -join ',') >> $env:GITHUB_OUTPUT
+          Write-Host "Changed entries: $($repos -join ', ')"
+
       - name: Verify pinned hashes and capabilities
         shell: pwsh
         env:
           # Lifts the unauthenticated GitHub API limit from 60/hour to 1000/hour.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./tools/verify-catalogue.ps1
+          ENTRIES: ${{ steps.touched.outputs.entries }}
+        run: |
+          if ($env:ENTRIES -eq 'none') {
+            Write-Host 'Nothing to verify: no catalogue entry changed.'
+            exit 0
+          }
+
+          if ($env:ENTRIES -eq 'all') {
+            ./tools/verify-catalogue.ps1
+          }
+          else {
+            ./tools/verify-catalogue.ps1 -Only ($env:ENTRIES -split ',')
+          }

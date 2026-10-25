@@ -20,6 +20,7 @@
     ./verify-catalogue.ps1 -Update         # re-pin every mod to its current latest release
     ./verify-catalogue.ps1 -Refresh        # re-read the pinned releases, keeping the pins
     ./verify-catalogue.ps1 -Only AI-Backend
+    ./verify-catalogue.ps1 -Only AI-Backend,Chaos-Mode   # just the entries a change touched
 #>
 [CmdletBinding()]
 param(
@@ -31,8 +32,8 @@ param(
     # Read the pinned releases again and rewrite what they record - the hashes, the
     # capabilities, the attribute - without moving the pin to a different release.
     [switch]$Refresh,
-    # Restrict to one repo name.
-    [string]$Only,
+    # Restrict to these repo names. A change only has to answer for the entries it touches.
+    [string[]]$Only,
     [string]$Token = $env:GH_TOKEN
 )
 
@@ -106,7 +107,7 @@ try {
 
     foreach ($mod in $mods) {
         $repo = Get-Field $mod 'repo'
-        if ($Only -and $repo -ne $Only) { continue }
+        if ($Only -and $Only -notcontains $repo) { continue }
 
         # An entry with no owner belongs to the project's own account.
         $owner = Get-Field $mod 'owner'

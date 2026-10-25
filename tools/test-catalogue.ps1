@@ -227,6 +227,59 @@ Test-It 'a catalogue with too many mods is refused' {
     Assert-True ($problems.Count -gt 0) 'the catalogue should have been refused'
 }
 
+Write-Host 'the entries a change touches'
+
+<#
+    Two catalogues in a temporary folder, and the names changed-mods.ps1 prints for them.
+#>
+function Test-Changed([string]$BeforeJson, [string]$AfterJson) {
+    $dir = Join-Path ([IO.Path]::GetTempPath()) ('swyf-changed-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    try {
+        $before = Join-Path $dir 'before.json'
+        $after = Join-Path $dir 'after.json'
+        [IO.File]::WriteAllText($before, $BeforeJson, (New-Object System.Text.UTF8Encoding($false)))
+        [IO.File]::WriteAllText($after, $AfterJson, (New-Object System.Text.UTF8Encoding($false)))
+        $script = Join-Path $PSScriptRoot 'changed-mods.ps1'
+        return @(& $script -Before $before -After $after)
+    }
+    finally {
+        Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Catalogue([string[]]$Entries) {
+    return ('{ "schemaVersion": 1, "mods": [ ' + ($Entries -join ', ') + ' ] }')
+}
+
+$alpha = '{ "owner": "someone", "repo": "Alpha", "displayName": "Alpha", "summary": "One.", "approvedVersion": "v1", "files": [ { "fileName": "Alpha.dll", "folder": "plugins", "expectsPluginAttribute": true } ] }'
+$alphaChanged = '{ "owner": "someone", "repo": "Alpha", "displayName": "Alpha", "summary": "One, changed.", "approvedVersion": "v1", "files": [ { "fileName": "Alpha.dll", "folder": "plugins", "expectsPluginAttribute": true } ] }'
+$alphaReordered = '{ "approvedVersion": "v1", "summary": "One.", "displayName": "Alpha", "repo": "Alpha", "owner": "someone", "files": [ { "fileName": "Alpha.dll", "folder": "plugins", "expectsPluginAttribute": true } ] }'
+$beta = '{ "owner": "someone", "repo": "Beta", "displayName": "Beta", "summary": "Two.", "approvedVersion": "v1", "files": [ { "fileName": "Beta.dll", "folder": "plugins", "expectsPluginAttribute": true } ] }'
+$gamma = '{ "owner": "someone", "repo": "Gamma", "displayName": "Gamma", "summary": "Three.", "approvedVersion": "v1", "files": [ { "fileName": "Gamma.dll", "folder": "plugins", "expectsPluginAttribute": true } ] }'
+
+Test-It 'an unchanged catalogue lists nothing' {
+    $listed = @(Test-Changed (Catalogue $alpha, $beta) (Catalogue $alpha, $beta))
+    Assert-Equal 0 $listed.Count 'nothing should have been listed'
+}
+
+Test-It 'a changed entry and a new entry are listed' {
+    $listed = @(Test-Changed (Catalogue $alpha, $beta) (Catalogue $alphaChanged, $beta, $gamma) | Sort-Object)
+    Assert-Equal 2 $listed.Count 'the changed and the new entry should have been listed'
+    Assert-Equal 'Alpha' $listed[0] 'Alpha should be listed'
+    Assert-Equal 'Gamma' $listed[1] 'Gamma should be listed'
+}
+
+Test-It 'a removed entry is not listed' {
+    $listed = @(Test-Changed (Catalogue $alpha, $beta) (Catalogue $alpha))
+    Assert-Equal 0 $listed.Count 'a removal has no release left to read'
+}
+
+Test-It 'the order of an entry''s fields is not a change' {
+    $listed = @(Test-Changed (Catalogue $alpha, $beta) (Catalogue $alphaReordered, $beta))
+    Assert-Equal 0 $listed.Count 'the entry says the same thing'
+}
+
 Write-Host ''
 if ($failures.Count -eq 0) {
     Write-Host 'Everything passed.' -ForegroundColor Green
