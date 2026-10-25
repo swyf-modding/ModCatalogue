@@ -143,6 +143,30 @@
       ]
     },
     {
+      "owner": "TIMOFEITV",
+      "repo": "ScamWYF-Twitch-Control",
+      "displayName": "ScamWYF Twitch Control",
+      "summary": "Allows your Twitch chat to play as the victims. All they have to do is type in !join, and be a victim you can scam. also comes bundled with timer configure to edit how much time you have.",
+      "approvedVersion": "0.1.7",
+      "files": [
+        {
+          "fileName": "ScamWYF.TwitchControl.dll",
+          "folder": "plugins",
+          "expectsPluginAttribute": true,
+          "sha256": "0caccbf60cdc8bcb58a91c73ac2a27fdd7518a80346a8de589594adaf2a04ed7",
+          "capabilities": [
+            "dynamic-code",
+            "filesystem-read",
+            "filesystem-write",
+            "network"
+          ],
+          "bepInPlugin": [
+            "community.scamwithyourfriends.twitchcontrol | SWYF Twitch Control | 0.1.7"
+          ]
+        }
+      ]
+    },
+    {
       "owner": "swyf-modding",
       "repo": "swyf-better-browse",
       "displayName": "Better Browse",
