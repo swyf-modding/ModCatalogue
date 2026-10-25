@@ -256,14 +256,20 @@ capability *appearing where it was not before* is impossible to miss.
 `tools/verify-catalogue.ps1` downloads each pinned release, checks the hash, rescans, and fails
 if the bytes or the capabilities moved. It also fails if the catalogue does not follow the rules,
 if a pinned file is not at the top of the download, if the shared library is routed wrongly, if a
-plugin's `[BepInPlugin]` attribute changed, or if a setup script changed. CI runs it on every pull
-request and weekly.
+plugin's `[BepInPlugin]` attribute changed, or if a setup script changed.
+
+On a pull request the gate reads only the entries the pull request changes —
+`tools/changed-mods.ps1` compares the catalogue with the base commit — and does no network work
+at all when no entry changed. A release taken down somewhere else is not this change's failure,
+and a submission should not go red for it. The weekly run still reads every entry, because there
+a pin that no longer describes a release is exactly what needs saying.
 
 The weekly run is the one that earns its keep: a git tag can be moved and a release asset can be
 replaced after the fact, so a pin that verified at merge time does not stay true by itself.
 
 ```powershell
-./tools/verify-catalogue.ps1              # the gate
+./tools/verify-catalogue.ps1              # every entry, the gate and the weekly sweep
+./tools/verify-catalogue.ps1 -Only AI-Backend,Chaos-Mode   # just these entries
 ./tools/verify-catalogue.ps1 -Update      # re-pin everything to current latest, then review the diff
 ./tools/verify-catalogue.ps1 -Refresh     # re-read the pinned releases, keeping the pins
 ./tools/scan-capabilities.ps1 -Path x.dll -Detail
