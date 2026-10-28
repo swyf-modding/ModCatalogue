@@ -222,6 +222,32 @@
       ]
     },
     {
+      "owner": "kyripkaraw",
+      "repo": "SWYF-Cloud-TTS",
+      "displayName": "SWYF Cloud TTS",
+      "summary": "Replaces the game's slow local Qwen voice with cloud text-to-speech: ElevenLabs, OpenAI, Google Gemini or your own Qwen3-TTS server. Lines start playing in about a second instead of after a minute-long model load, with almost no CPU or GPU load. Every character keeps a voice of their own; on ElevenLabs Starter each one is cloned from their in-game voice. Set it up in Settings > Speech > CLOUD TTS. Needs your own API key and internet; dialogue text is sent to the provider you pick.",
+      "approvedVersion": "v1.4.0",
+      "files": [
+        {
+          "fileName": "SwyfCloudTts.dll",
+          "folder": "plugins",
+          "expectsPluginAttribute": true,
+          "sha256": "70d0c33d80fc4695342cd4884eca3af3561ad940fec227ef34259fd112f14976",
+          "capabilities": [
+            "base64",
+            "dynamic-code",
+            "environment",
+            "filesystem-read",
+            "filesystem-write",
+            "network"
+          ],
+          "bepInPlugin": [
+            "com.kyripkaraw.swyfcloudtts | SWYF Cloud TTS | 1.4.0"
+          ]
+        }
+      ]
+    },
+    {
       "owner": "xofa18",
       "repo": "SWYF-ModManager",
       "displayName": "Mod Manager",
