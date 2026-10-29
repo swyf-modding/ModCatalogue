@@ -292,6 +292,44 @@
           ]
         }
       ]
+    },
+    {
+      "owner": "swyf-modding",
+      "repo": "Voice-Backend",
+      "displayName": "Voice Backend",
+      "summary": "Replaces Whisper/Moonshine with Parakeet, or any cloud model like Deepgram, and replaces pocket tts with Kokoro or any cloud model like ElevenLabs",
+      "approvedVersion": "v0.5.0",
+      "files": [
+        {
+          "fileName": "ScamWYF.VoiceBackend.dll",
+          "folder": "plugins",
+          "expectsPluginAttribute": true,
+          "sha256": "2ab29dffb547f71b493f4095d438f5a2f5301cbcb5d46f3c94b5381c91095cba",
+          "capabilities": [
+            "base64",
+            "dynamic-code",
+            "environment",
+            "filesystem-read",
+            "filesystem-write",
+            "native-interop",
+            "network"
+          ],
+          "bepInPlugin": [
+            "com.community.scamwyf.voicebackend | Scam WYF Voice Backend | 0.5.0"
+          ]
+        },
+        {
+          "fileName": "ScamWYF.Modding.Core.dll",
+          "folder": "core",
+          "expectsPluginAttribute": false,
+          "sha256": "109e85f66f2db1b52d1d92a26485f4ec7bd7a3aa1911b3bcfc212291a703ff54",
+          "capabilities": [
+            "dynamic-code",
+            "filesystem-read",
+            "filesystem-write"
+          ]
+        }
+      ]
     }
   ]
 }
