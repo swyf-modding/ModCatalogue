@@ -1,0 +1,258 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-30T06:40:13Z",
+  "mods": [
+    {
+      "owner": "swyf-modding",
+      "repo": "AI-Backend",
+      "pinned": {
+        "tag": "v1.2.1",
+        "asset": "ScamWYF.AiBackend-v1.2.1.zip",
+        "url": "https://github.com/swyf-modding/AI-Backend/releases/download/v1.2.1/ScamWYF.AiBackend-v1.2.1.zip",
+        "size": 81786,
+        "sha256": "f4c701770b32b21e5b652b10ae09bed9e5ed06682e26dda4f692270574a87589",
+        "page": "https://github.com/swyf-modding/AI-Backend/releases/tag/v1.2.1"
+      },
+      "newest": {
+        "tag": "v1.2.1",
+        "asset": "ScamWYF.AiBackend-v1.2.1.zip",
+        "url": "https://github.com/swyf-modding/AI-Backend/releases/download/v1.2.1/ScamWYF.AiBackend-v1.2.1.zip",
+        "size": 81786,
+        "sha256": "f4c701770b32b21e5b652b10ae09bed9e5ed06682e26dda4f692270574a87589",
+        "page": "https://github.com/swyf-modding/AI-Backend/releases/tag/v1.2.1"
+      },
+      "problem": null
+    },
+    {
+      "owner": "TIMOFEITV",
+      "repo": "Caller-Portrait-Importer",
+      "pinned": {
+        "tag": "Stable",
+        "asset": "CallerPortraitImporter-v0.2.zip",
+        "url": "https://github.com/TIMOFEITV/Caller-Portrait-Importer/releases/download/Stable/CallerPortraitImporter-v0.2.zip",
+        "size": 16696,
+        "sha256": "62d6c5469235c527b697817ed1d0699b6cf20750a017cbb642f12a32dd47e2b7",
+        "page": "https://github.com/TIMOFEITV/Caller-Portrait-Importer/releases/tag/Stable"
+      },
+      "newest": {
+        "tag": "Stable",
+        "asset": "CallerPortraitImporter-v0.2.zip",
+        "url": "https://github.com/TIMOFEITV/Caller-Portrait-Importer/releases/download/Stable/CallerPortraitImporter-v0.2.zip",
+        "size": 16696,
+        "sha256": "62d6c5469235c527b697817ed1d0699b6cf20750a017cbb642f12a32dd47e2b7",
+        "page": "https://github.com/TIMOFEITV/Caller-Portrait-Importer/releases/tag/Stable"
+      },
+      "problem": null
+    },
+    {
+      "owner": "wcixv",
+      "repo": "chaos-mode",
+      "pinned": {
+        "tag": "v1.2",
+        "asset": "ChaosMode-v1.2.zip",
+        "url": "https://github.com/wcixv/chaos-mode/releases/download/v1.2/ChaosMode-v1.2.zip",
+        "size": 30313,
+        "sha256": "6d256dd4800ee85197cd0c358dea21441edce8b1d47f36134e40421c3d5d3e84",
+        "page": "https://github.com/wcixv/chaos-mode/releases/tag/v1.2"
+      },
+      "newest": {
+        "tag": "v1.3",
+        "asset": "ChaosMode-v1.3.zip",
+        "url": "https://github.com/wcixv/chaos-mode/releases/download/v1.3/ChaosMode-v1.3.zip",
+        "size": 32184,
+        "sha256": "1efa0137d6dd7b16d1fed4ee88dc806e34142800485e64ec1b346c2cd3e0997c",
+        "page": "https://github.com/wcixv/chaos-mode/releases/tag/v1.3"
+      },
+      "problem": null
+    },
+    {
+      "owner": "ProProgramer123",
+      "repo": "HostBoss",
+      "pinned": {
+        "tag": "v1.5.0",
+        "asset": "HostBoss-Plugin-1.5.0.zip",
+        "url": "https://github.com/ProProgramer123/HostBoss/releases/download/v1.5.0/HostBoss-Plugin-1.5.0.zip",
+        "size": 21900,
+        "sha256": "722bc85aa5783f18f9eb2b03356c861c323da3852a80a52bce13d10d0052f431",
+        "page": "https://github.com/ProProgramer123/HostBoss/releases/tag/v1.5.0"
+      },
+      "newest": {
+        "tag": "v1.60.4",
+        "asset": "HostBoss-Plugin-1.60.4.zip",
+        "url": "https://github.com/ProProgramer123/HostBoss/releases/download/v1.60.4/HostBoss-Plugin-1.60.4.zip",
+        "size": 109155,
+        "sha256": "6d3e4c3293f869b595464dc9110a89c05f962c5f8566f11761f997052d562b54",
+        "page": "https://github.com/ProProgramer123/HostBoss/releases/tag/v1.60.4"
+      },
+      "problem": null
+    },
+    {
+      "owner": "swyf-modding",
+      "repo": "Mod-Handler",
+      "pinned": {
+        "tag": "v1.0.4",
+        "asset": "ScamWYF.ModHandler-v1.0.4.zip",
+        "url": "https://github.com/swyf-modding/Mod-Handler/releases/download/v1.0.4/ScamWYF.ModHandler-v1.0.4.zip",
+        "size": 64329,
+        "sha256": "4d9441fcaeb4706b89af10665488805531e48e8888e9150e0ecac95de6406662",
+        "page": "https://github.com/swyf-modding/Mod-Handler/releases/tag/v1.0.4"
+      },
+      "newest": {
+        "tag": "v1.0.4",
+        "asset": "ScamWYF.ModHandler-v1.0.4.zip",
+        "url": "https://github.com/swyf-modding/Mod-Handler/releases/download/v1.0.4/ScamWYF.ModHandler-v1.0.4.zip",
+        "size": 64329,
+        "sha256": "4d9441fcaeb4706b89af10665488805531e48e8888e9150e0ecac95de6406662",
+        "page": "https://github.com/swyf-modding/Mod-Handler/releases/tag/v1.0.4"
+      },
+      "problem": null
+    },
+    {
+      "owner": "swyf-modding",
+      "repo": "ScamWithYourSlang",
+      "pinned": {
+        "tag": "0.3.0",
+        "asset": "ScamWYF.Translate-v0.3.0.zip",
+        "url": "https://github.com/swyf-modding/ScamWithYourSlang/releases/download/0.3.0/ScamWYF.Translate-v0.3.0.zip",
+        "size": 2565724,
+        "sha256": "91849180317bcb918cb0dd82d88359e0f8d4fac30c9c898e06f3271f700a376a",
+        "page": "https://github.com/swyf-modding/ScamWithYourSlang/releases/tag/0.3.0"
+      },
+      "newest": {
+        "tag": "0.3.1",
+        "asset": "ScamWYF.Translate-0.3.1.zip",
+        "url": "https://github.com/swyf-modding/ScamWithYourSlang/releases/download/0.3.1/ScamWYF.Translate-0.3.1.zip",
+        "size": 2565879,
+        "sha256": "1670cfe2694745a126d90064825be395cb6a596ba1df56a052dd6259d660a209",
+        "page": "https://github.com/swyf-modding/ScamWithYourSlang/releases/tag/0.3.1"
+      },
+      "problem": null
+    },
+    {
+      "owner": "TIMOFEITV",
+      "repo": "ScamWYF-Twitch-Control",
+      "pinned": {
+        "tag": "0.1.7",
+        "asset": "ScamWYF-TwitchControl-v0.1.7.zip",
+        "url": "https://github.com/TIMOFEITV/ScamWYF-Twitch-Control/releases/download/0.1.7/ScamWYF-TwitchControl-v0.1.7.zip",
+        "size": 29879,
+        "sha256": "0eb135ff86469adc6f05bb27a2b6f7b1846257c43d5107327479428864b84817",
+        "page": "https://github.com/TIMOFEITV/ScamWYF-Twitch-Control/releases/tag/0.1.7"
+      },
+      "newest": {
+        "tag": "0.1.7",
+        "asset": "ScamWYF-TwitchControl-v0.1.7.zip",
+        "url": "https://github.com/TIMOFEITV/ScamWYF-Twitch-Control/releases/download/0.1.7/ScamWYF-TwitchControl-v0.1.7.zip",
+        "size": 29879,
+        "sha256": "0eb135ff86469adc6f05bb27a2b6f7b1846257c43d5107327479428864b84817",
+        "page": "https://github.com/TIMOFEITV/ScamWYF-Twitch-Control/releases/tag/0.1.7"
+      },
+      "problem": null
+    },
+    {
+      "owner": "swyf-modding",
+      "repo": "swyf-better-browse",
+      "pinned": {
+        "tag": "v0.1.0",
+        "asset": "ScamWYF.BetterBrowse-v0.1.0.zip",
+        "url": "https://github.com/swyf-modding/swyf-better-browse/releases/download/v0.1.0/ScamWYF.BetterBrowse-v0.1.0.zip",
+        "size": 70216,
+        "sha256": "0eba56d0c80ad6b528485a39b5831d09bf3ac34036642a35120ae93f18fd753e",
+        "page": "https://github.com/swyf-modding/swyf-better-browse/releases/tag/v0.1.0"
+      },
+      "newest": {
+        "tag": "v0.1.0",
+        "asset": "ScamWYF.BetterBrowse-v0.1.0.zip",
+        "url": "https://github.com/swyf-modding/swyf-better-browse/releases/download/v0.1.0/ScamWYF.BetterBrowse-v0.1.0.zip",
+        "size": 70216,
+        "sha256": "0eba56d0c80ad6b528485a39b5831d09bf3ac34036642a35120ae93f18fd753e",
+        "page": "https://github.com/swyf-modding/swyf-better-browse/releases/tag/v0.1.0"
+      },
+      "problem": null
+    },
+    {
+      "owner": "kyripkaraw",
+      "repo": "SWYF-Cloud-TTS",
+      "pinned": {
+        "tag": "v1.4.0",
+        "asset": "SWYF-CloudTTS-BepInEx-v1.4.0.zip",
+        "url": "https://github.com/kyripkaraw/SWYF-Cloud-TTS/releases/download/v1.4.0/SWYF-CloudTTS-BepInEx-v1.4.0.zip",
+        "size": 97309,
+        "sha256": "cccfcbea347bcb234cc448ba84bc8f6f13d720c3e9024fed5ef7fd696bbad9f9",
+        "page": "https://github.com/kyripkaraw/SWYF-Cloud-TTS/releases/tag/v1.4.0"
+      },
+      "newest": {
+        "tag": "v1.5.0",
+        "asset": "SWYF-CloudTTS-BepInEx-v1.5.0.zip",
+        "url": "https://github.com/kyripkaraw/SWYF-Cloud-TTS/releases/download/v1.5.0/SWYF-CloudTTS-BepInEx-v1.5.0.zip",
+        "size": 99047,
+        "sha256": "e5d0adae321918a322014082f4ea8534a97ff7e187715ca514d507bc66d36923",
+        "page": "https://github.com/kyripkaraw/SWYF-Cloud-TTS/releases/tag/v1.5.0"
+      },
+      "problem": null
+    },
+    {
+      "owner": "xofa18",
+      "repo": "SWYF-ModManager",
+      "pinned": {
+        "tag": "v0.1.0",
+        "asset": "SwyfModManager-v0.1.0.zip",
+        "url": "https://github.com/xofa18/SWYF-ModManager/releases/download/v0.1.0/SwyfModManager-v0.1.0.zip",
+        "size": 17816,
+        "sha256": "1364b701dd8f49d9bbea399d5ed41985868d47a4e89f0eff68e5e0b74b44e5ee",
+        "page": "https://github.com/xofa18/SWYF-ModManager/releases/tag/v0.1.0"
+      },
+      "newest": {
+        "tag": "v0.1.1",
+        "asset": "SwyfModManager-v0.1.1.zip",
+        "url": "https://github.com/xofa18/SWYF-ModManager/releases/download/v0.1.1/SwyfModManager-v0.1.1.zip",
+        "size": 17924,
+        "sha256": "dcc4e42c21a1064ef4990105c2206dbd1c2d3ba4cbbc9c7bbb624d69d7367095",
+        "page": "https://github.com/xofa18/SWYF-ModManager/releases/tag/v0.1.1"
+      },
+      "problem": null
+    },
+    {
+      "owner": "richardvrabelx-oss",
+      "repo": "SWYF-SWAT",
+      "pinned": {
+        "tag": "V1.0.0",
+        "asset": "SwatOnQuotaFail.zip",
+        "url": "https://github.com/richardvrabelx-oss/SWYF-SWAT/releases/download/V1.0.0/SwatOnQuotaFail.zip",
+        "size": 10805,
+        "sha256": "8f4d7449f584fa4cfb0d70863e1519248d8715b6ed33901f25e9403d3966247d",
+        "page": "https://github.com/richardvrabelx-oss/SWYF-SWAT/releases/tag/V1.0.0"
+      },
+      "newest": {
+        "tag": "V1.0.0",
+        "asset": "SwatOnQuotaFail.zip",
+        "url": "https://github.com/richardvrabelx-oss/SWYF-SWAT/releases/download/V1.0.0/SwatOnQuotaFail.zip",
+        "size": 10805,
+        "sha256": "8f4d7449f584fa4cfb0d70863e1519248d8715b6ed33901f25e9403d3966247d",
+        "page": "https://github.com/richardvrabelx-oss/SWYF-SWAT/releases/tag/V1.0.0"
+      },
+      "problem": null
+    },
+    {
+      "owner": "swyf-modding",
+      "repo": "Voice-Backend",
+      "pinned": {
+        "tag": "v0.5.0",
+        "asset": "Voice-Backend-0.5.0.zip",
+        "url": "https://github.com/swyf-modding/Voice-Backend/releases/download/v0.5.0/Voice-Backend-0.5.0.zip",
+        "size": 132739,
+        "sha256": "b8ffc9796ee019a44308e7fdfe28e3b1957eada66c8badf50e66f724db3bde2a",
+        "page": "https://github.com/swyf-modding/Voice-Backend/releases/tag/v0.5.0"
+      },
+      "newest": {
+        "tag": "v0.5.1",
+        "asset": "Voice-Backend-0.5.1.zip",
+        "url": "https://github.com/swyf-modding/Voice-Backend/releases/download/v0.5.1/Voice-Backend-0.5.1.zip",
+        "size": 133759,
+        "sha256": "dc2ea317c325acfb0b49d79351b1a4792871a4ee1fb4fd67d81370d5c82f17ef",
+        "page": "https://github.com/swyf-modding/Voice-Backend/releases/tag/v0.5.1"
+      },
+      "problem": null
+    }
+  ]
+}

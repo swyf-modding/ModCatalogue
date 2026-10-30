@@ -101,3 +101,39 @@ jobs:
           else {
             ./tools/verify-catalogue.ps1 -Only ($env:ENTRIES -split ',')
           }
+
+  # Writes releases.json, which is how Switchboard reads a release without asking GitHub for it.
+  #
+  # Separate job because it needs to commit, and the job above deliberately has read-only access.
+  # It runs on the same weekly schedule, on a push that changes the catalogue, and when asked; not
+  # on a pull request, where the result would describe a list that is not merged yet.
+  #
+  # A release that cannot be read is written into the entry as a problem rather than failing this,
+  # because one author's deleted tag should not stop every other mod being described.
+  snapshot:
+    needs: verify
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read every entry's releases
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./tools/write-releases.ps1
+
+      - name: Commit it if it moved
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- releases.json; then
+            echo "releases.json is unchanged"
+            exit 0
+          fi
+          git config user.name 'swyf-modding'
+          git config user.email 'bot@swyf-modding.invalid'
+          git add releases.json
+          git commit -m 'Refresh releases.json from the weekly check'
+          git push
