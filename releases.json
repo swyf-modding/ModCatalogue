@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-30T06:41:30Z",
+  "generatedAt": "2026-10-31T05:48:50Z",
   "mods": [
     {
       "owner": "swyf-modding",
@@ -111,20 +111,20 @@
       "owner": "swyf-modding",
       "repo": "ScamWithYourSlang",
       "pinned": {
-        "tag": "0.3.0",
-        "asset": "ScamWYF.Translate-v0.3.0.zip",
-        "url": "https://github.com/swyf-modding/ScamWithYourSlang/releases/download/0.3.0/ScamWYF.Translate-v0.3.0.zip",
-        "size": 2565724,
-        "sha256": "91849180317bcb918cb0dd82d88359e0f8d4fac30c9c898e06f3271f700a376a",
-        "page": "https://github.com/swyf-modding/ScamWithYourSlang/releases/tag/0.3.0"
+        "tag": "0.4.0",
+        "asset": "ScamWYF.Translate-0.4.0.zip",
+        "url": "https://github.com/swyf-modding/ScamWithYourSlang/releases/download/0.4.0/ScamWYF.Translate-0.4.0.zip",
+        "size": 2566380,
+        "sha256": "fcfe24b52ef863cd40f1199a9e8867e4ba5608a5076cf1d4ae699994503ba77d",
+        "page": "https://github.com/swyf-modding/ScamWithYourSlang/releases/tag/0.4.0"
       },
       "newest": {
-        "tag": "0.3.1",
-        "asset": "ScamWYF.Translate-0.3.1.zip",
-        "url": "https://github.com/swyf-modding/ScamWithYourSlang/releases/download/0.3.1/ScamWYF.Translate-0.3.1.zip",
-        "size": 2565879,
-        "sha256": "1670cfe2694745a126d90064825be395cb6a596ba1df56a052dd6259d660a209",
-        "page": "https://github.com/swyf-modding/ScamWithYourSlang/releases/tag/0.3.1"
+        "tag": "0.4.0",
+        "asset": "ScamWYF.Translate-0.4.0.zip",
+        "url": "https://github.com/swyf-modding/ScamWithYourSlang/releases/download/0.4.0/ScamWYF.Translate-0.4.0.zip",
+        "size": 2566380,
+        "sha256": "fcfe24b52ef863cd40f1199a9e8867e4ba5608a5076cf1d4ae699994503ba77d",
+        "page": "https://github.com/swyf-modding/ScamWithYourSlang/releases/tag/0.4.0"
       },
       "problem": null
     },
