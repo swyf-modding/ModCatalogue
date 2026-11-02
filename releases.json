@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-31T05:48:50Z",
+  "generatedAt": "2026-11-02T15:50:58Z",
   "mods": [
     {
       "owner": "swyf-modding",
@@ -77,12 +77,12 @@
         "page": "https://github.com/ProProgramer123/HostBoss/releases/tag/v1.5.0"
       },
       "newest": {
-        "tag": "v1.60.4",
-        "asset": "HostBoss-Plugin-1.60.4.zip",
-        "url": "https://github.com/ProProgramer123/HostBoss/releases/download/v1.60.4/HostBoss-Plugin-1.60.4.zip",
-        "size": 109155,
-        "sha256": "6d3e4c3293f869b595464dc9110a89c05f962c5f8566f11761f997052d562b54",
-        "page": "https://github.com/ProProgramer123/HostBoss/releases/tag/v1.60.4"
+        "tag": "v1.60.6",
+        "asset": "HostBoss-Plugin-1.60.6.zip",
+        "url": "https://github.com/ProProgramer123/HostBoss/releases/download/v1.60.6/HostBoss-Plugin-1.60.6.zip",
+        "size": 113263,
+        "sha256": "8329ac95c62262112e49ca70f09efb6787738092f2978a2a7c22a382aed3d688",
+        "page": "https://github.com/ProProgramer123/HostBoss/releases/tag/v1.60.6"
       },
       "problem": null
     },
